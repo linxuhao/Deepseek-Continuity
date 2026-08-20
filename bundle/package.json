@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-continuity",
   "version": "0.0.1",
-  "description": "Keeps generated assets consistent across calls and refuses degenerate output. Bring your own backend URLs.",
+  "description": "Local multimodal plugin for DeepSeek Harness with asset consistency: lazy-loaded models, zero VRAM when idle, and generated assets that stay the same thing across calls.",
   "type": "module",
   "files": [
     "cordis.patch.yml"
