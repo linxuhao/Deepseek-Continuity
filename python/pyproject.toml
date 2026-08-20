@@ -1,0 +1,23 @@
+[project]
+name = "assetcast-mcp"
+version = "0.0.1"
+description = "Asset consistency and output verification MCP server. Brings your own backend URLs."
+readme = "../README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "mcp>=1.2",
+  "httpx",
+  "numpy",
+  "pillow",
+  # 抠图: FLUX 画的"透明背景"是不透明的棋盘格, 做精灵图必须转成真 RGBA
+  "rembg",
+  "onnxruntime",
+]
+
+[project.scripts]
+assetcast-mcp = "assetcast_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

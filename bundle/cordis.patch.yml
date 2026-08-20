@@ -1,0 +1,20 @@
+# dsh 通过内置的 mcp-client 拉起 assetcast 的 MCP server, 并负责生命周期与自动重连。
+# 工具会以 mcp__assetcast__<name> 出现 (create_actor / actor_tts / create_character /
+# create_object / subject_image / remove_bg / ...)。
+#
+# 本插件不托管模型: 下面三个 URL 指向你自己 host 的引擎, 或任何 OpenAI 兼容的服务。
+- insert:
+    - id: assetcast
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: assetcast
+        transport: stdio
+        command: uvx
+        args: ['assetcast-mcp']
+        env:
+          # OpenAI 兼容: POST {IMAGE_BACKEND_URL}/v1/images/generations
+          IMAGE_BACKEND_URL: !!js process.env.ASSETCAST_IMAGE_URL
+          # OpenAI 兼容: POST {SPEECH_BACKEND_URL}/v1/audio/speech
+          SPEECH_BACKEND_URL: !!js process.env.ASSETCAST_SPEECH_URL
+          # 参考音/定妆图存放处 —— 不可复现, 丢了就是永久丢了, 建议指向有备份的位置
+          ASSETCAST_STATE_DIR: !!js process.env.ASSETCAST_STATE_DIR

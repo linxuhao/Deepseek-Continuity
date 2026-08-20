@@ -1,0 +1,10 @@
+{
+  "name": "dsh-plugin-assetcast",
+  "version": "0.0.1",
+  "description": "Asset consistency and output verification for agents. Brings your own backend URLs.",
+  "type": "module",
+  "files": ["cordis.patch.yml"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "mcp", "agent", "assets"],
+  "license": "MIT",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
