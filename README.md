@@ -68,10 +68,14 @@ Background removal is the ceiling, and its cost is **independent of input size**
 1024 px all peak at ~6.8 GB, because BiRefNet runs at a fixed internal resolution. The memory
 is transient (it returns to baseline afterwards), but it must exist at that moment.
 
-**On a 16 GB machine everything works.** On **8 GB**, use `quality="fast"` (u2netp): peak drops
-to 1.33 GB and it runs in 0.4 s instead of 6.8 s. The trade is edge quality — the fast model
-leaves a grey halo where BiRefNet gives clean soft edges, which matters for sprites and does
-not for a quick mask.
+**On a 16 GB machine everything works.** On **8 GB**, use `quality="fast"` (u2netp): peak
+drops to 1.33 GB and it runs in 0.6 s instead of 7.2 s.
+
+On a typical game sprite the two are hard to tell apart by eye — checked side by side over a
+magenta backdrop with the edges zoomed. `best` remains the default because the models do
+differ in principle on fine edges (hair, semi-transparent fringes), but treat `fast` as a
+legitimate choice rather than a degraded fallback, and check your own subject before assuming
+either way.
 
 Weights are mmap'd, so beyond these peaks extra RAM only buys page cache. Without it the
 first image after eviction costs +3 s (15.0 s vs 12.0 s, measured).
