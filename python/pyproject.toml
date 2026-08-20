@@ -1,5 +1,5 @@
 [project]
-name = "assetcast-mcp"
+name = "continuity-mcp"
 version = "0.0.1"
 description = "Asset consistency and output verification MCP server. Brings your own backend URLs."
 readme = "../README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-assetcast-mcp = "assetcast_mcp.server:main"
+continuity-mcp = "continuity_mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
