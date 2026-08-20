@@ -34,6 +34,61 @@ Weights are mmap'd and sit in page cache.
 Requests are serialized, so peak = the single largest model = **6.80 GB**. An 8 GB card fits
 the whole stack.
 
+## Minimum requirements
+
+| | Minimum | Notes |
+|---|---|---|
+| **GPU** | **8 GB VRAM** | Peak is 6.80 GB (measured). Requests are serialized, so peak is one model, not the sum. |
+| **GPU API** | **Vulkan 1.2+** | AMD / NVIDIA / Intel. **No CUDA, no ROCm.** Kernels are SPIR-V compiled at runtime. |
+| **Disk** | **~25 GB** | ~18 GB weights + ~4 GB container images + engine binaries. |
+| **Host RAM** | **16 GB** (8 GB workable — see below) | Driven by transient peaks, not idle. |
+| **CPU** | any x86-64 | Background removal runs on CPU (~7 s per 1024² image). |
+
+Vulkan instead of CUDA is not a preference — it is why this runs at all. ROCm miscomputes
+VAE decode on this GPU class ([ROCm#6633](https://github.com/ROCm/ROCm/issues/6633)):
+five decodes of identical input returned five mutually uncorrelated results. Vulkan/RADV
+compiles SPIR-V at runtime instead of looking up a per-arch kernel table, and is correct
+and faster here. The side effect is portability across all three vendors.
+
+### Host RAM in detail
+
+Idle is negligible; the peaks are what sizes the machine. Total RSS across the three
+service containers, measured:
+
+| operation | peak RSS |
+|---|---|
+| idle | 0.52 GB |
+| music (30 s) | 0.50 GB |
+| speech | 1.63 GB |
+| image (1024²) | 4.94 GB |
+| `remove_bg` `quality="best"` | **7.74 GB** |
+| `remove_bg` `quality="fast"` | 1.33 GB |
+
+Background removal is the ceiling, and its cost is **independent of input size** — 256 / 512 /
+1024 px all peak at ~6.8 GB, because BiRefNet runs at a fixed internal resolution. The memory
+is transient (it returns to baseline afterwards), but it must exist at that moment.
+
+**On a 16 GB machine everything works.** On **8 GB**, use `quality="fast"` (u2netp): peak drops
+to 1.33 GB and it runs in 0.4 s instead of 6.8 s. The trade is edge quality — the fast model
+leaves a grey halo where BiRefNet gives clean soft edges, which matters for sprites and does
+not for a quick mask.
+
+Weights are mmap'd, so beyond these peaks extra RAM only buys page cache. Without it the
+first image after eviction costs +3 s (15.0 s vs 12.0 s, measured).
+
+### On smaller cards
+
+6.80 GB is a floor for this model family, and **quantizing the diffusion model does not
+move it**: Q4_0 (2.29 GB of weights) peaks at 6.60 GB, Q8_0 (4.01 GB) at 6.59 GB — identical.
+The bottleneck is the **8 GB unquantized 4B text encoder**, not the diffusion model. Lowering
+resolution does not help either (512 / 768 / 1024 all peak identically; only time changes).
+
+Ship Q4_0 anyway — same VRAM, 1.7 GB less disk.
+
+Going below 8 GB means changing the text encoder or the model family. That is possible, but
+it moves identity pinning from native `ref_images` to IP-Adapter, which is **not yet
+verified here** — and identity pinning is the whole point.
+
 ## Two things it actually does
 
 **1. Identity survives across calls.** Generation backends are stateless: ask for the same
