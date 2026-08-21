@@ -60,7 +60,7 @@ def download_models(models_dir, groups):
         from huggingface_hub import hf_hub_download
     except ImportError:
         die("缺 huggingface_hub。装法: pip install huggingface_hub\n"
-            "  (或者用 uvx 跑本工具: uvx --from continuity-mcp continuity-setup)")
+            f"  (或者用 uvx 跑本工具: uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup)")
     manifest = json.loads((DEPLOY / "models.json").read_text(encoding="utf-8"))
     todo = [m for m in manifest["models"] if m["group"] in groups]
     total = sum(m["size_bytes"] for m in todo) / preflight.GIB
@@ -258,7 +258,7 @@ def _print_done(state_dir, report, env, profiles, mode="dri"):
         say("  CONTINUITY_ENABLE_IMAGE=0 \\")
     say(f"  CONTINUITY_CUTOUT_QUALITY={report['cutout_quality']} \\")
 
-    say("  uvx continuity-mcp")
+    say(f"  uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-mcp")
     say("")
     say("引擎的开关:")
     say(f"  docker compose -p continuity {' '.join(f'--profile {p}' for p in profiles)} stop|start")

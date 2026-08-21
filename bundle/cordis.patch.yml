@@ -3,7 +3,7 @@
 # import_actor / import_subject / subject_image / remove_bg / gen_sfx / ...)。
 #
 # 后端引擎不在这里起 —— 先跑一次:
-#     uvx --from continuity-mcp continuity-setup
+#     uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup
 # 它会体检本机 (显存/内存/磁盘)、编引擎镜像、只下这台机器用得上的权重、把两个
 # ggml/Vulkan 引擎跑起来, 并按显存把下面这些变量该设的设好。
 #
