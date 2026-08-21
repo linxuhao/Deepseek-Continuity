@@ -277,22 +277,39 @@ tracks a natively-cast one to 11 Hz).
 The pinning tools tell the agent to *look at the reference before committing to it*. So they
 return the image, not just its path — a 512 px JPEG (~35 KB) alongside the text, as MCP image
 content. **There is no VLM in this plugin and there will not be one:** a vision model wants its
-own VRAM, which would destroy the property that peak = the single largest model. The harness
-already has a model; give it the picture instead of running a second one.
+own VRAM, which would destroy the property that peak = the single largest model, and the 8 GiB
+floor rests on that. The harness already has a model; hand it the picture instead of running a
+second one.
 
-Whether the agent can actually see it depends on the harness's model. As of 2026-08-21,
-DeepSeek's API answers `INVALID_REQUEST: This model does not support image` for
-`deepseek-v4-flash`, so on that model it is inert — dsh degrades it to `[image unavailable]`
-and the run continues normally (observed, not assumed). Point the profile at any
-image-capable model and it starts working with no change here.
-Set `CONTINUITY_INLINE_IMAGES=0` to send text only.
+Verified end to end on dsh `0.1.1-rc.1` with the vision model — plain `deepseek-v4-flash`
+does **not** accept images and answers `INVALID_REQUEST: This model does not support image`:
 
-Note what this does *not* solve. Statistical verification (below) catches a grey PNG; a model
-looking at the picture catches "that is not the character I asked for". Neither catches
-geometry drift reliably — an earlier VLM-as-judge experiment here scored 9/9/10 on chest
-renders whose lids were visibly the wrong shape. Writing the geometry explicitly into
-`appearance` remains the fix; the picture is for the human-shaped judgement, not a replacement
-for it.
+```yaml
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-v4-flash-vision-exp
+```
+
+Asked to pin *"a square metal lantern with EXACTLY FIVE blue glass panels and a green
+handle"* and then check the render against that description item by item, the agent answered:
+
+> **面板数量 — 不符合。** 图中实际可见的是 4 块蓝色面板(正面 2 + 右侧面 2)，并非 5 块。
+> 而且从"每面 2 块"的网格规律看，若其余两面同规格，总数应为 8 块。
+
+It counted, it disagreed with the prompt it had just been given, and it said what it actually
+saw. That is the loop the statistical checks cannot close: they catch a grey PNG, this catches
+*"that is not the thing I asked for."*
+
+On a model without image input the block degrades to `[image unavailable]` and the run
+continues normally — observed on dsh, not assumed; the agent then says it received no image
+rather than guessing from `appearance`. `CONTINUITY_INLINE_IMAGES=0` sends text only.
+
+One older caveat, corrected: an earlier experiment here had a self-hosted 27B VLM score 9/9/10
+on chest renders whose lids were visibly the wrong shape, and I had written that off as "VLM
+judges are blind to geometry". The panel-counting result above is evidence that was a
+statement about *that* model, not a general law. Writing geometry explicitly into `appearance`
+is still the cheaper fix, but the check is now worth running.
 
 **2. Degenerate output is refused.** A backend that miscomputes returns a perfectly
 well-formed all-zero WAV, or a flat grey PNG, with HTTP 200. Every artifact is checked
