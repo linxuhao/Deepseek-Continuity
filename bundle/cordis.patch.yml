@@ -16,7 +16,10 @@
         serverName: continuity
         transport: stdio
         command: uvx
-        args: ['continuity-mcp']
+        # 从本仓库装, 不从 PyPI 按名字解析。
+        # PyPI 上的 `continuity-mcp` 是另一个完全无关的项目 (别人的, 2026-07 起就在),
+        # 写成 `uvx continuity-mcp` 会在每次启动时把那个包拉下来跑。
+        args: ['--from', 'git+https://github.com/linxuhao/Deepseek-Continuity', 'continuity-mcp']
         # env 是 z.dict(String): 值不能是 undefined, 否则整个 profile 加载失败。
         # 所以每个都 `?? ''` —— MCP server 那边把空串当成"没设", 用它自己的默认值。
         env:
