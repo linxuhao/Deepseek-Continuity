@@ -1,48 +1,66 @@
 # 场记 / Continuity
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that gives an
-agent the five senses **and remembers what it made** — the same character stays the same
-character across every call, and a failed generation is never allowed to pass as a success.
+agent local image / speech / music / SFX generation **and remembers what it made** — the same
+character stays the same character across every call, and a failed generation is never allowed
+to pass as a success.
 
 Runs locally. Models are lazy-loaded per request and released when idle, so **when you are
-not using it the GPU is untouched** — 0.21 GB resident, measured. You can play a game on
+not using it the GPU is untouched** — 0.21 GiB resident, measured. You can play a game on
 the same card.
 
 > 场记 is the continuity supervisor on a film set. Their entire job is two things: make sure
 > the costume, hair and props match between takes, and catch the mistake on set before it is
 > cut into the film. That is exactly this plugin's job.
 
-## Zero residency
+## Install
 
-Measured on an RX 7800 XT, engines running, no request in flight:
+```bash
+uvx --from continuity-mcp continuity-setup      # preflight → build engines → fetch weights → start
+dsh plugin --profile <your-profile> add dsh-plugin-continuity
+```
 
-| | GPU |
-|---|---|
-| idle | **0.21 GB** |
-| during image generation | 6.80 GB |
-| 2 s after it finishes | **0.21 GB** (holds at 10 / 30 / 60 s) |
-| during TTS | 2.35 GB |
-| 120 s after TTS | **0.21 GB** |
+`continuity-setup` checks the machine before it downloads anything, and sizes the install to
+what it finds. Run `continuity-setup --check` first to see what it would do — that reads
+hardware and changes nothing:
 
-Images are free: the engine streams weights per request and never keeps them resident.
-Audio is released by an idle timer (`AUDIO_IDLE_UNLOAD_S`, default 120 s) — not immediately,
-because someone voicing ten lines in a row should not pay a reload each time.
+```
+体检结果:
+  GPU     AMD Radeon RX 7800 XT (RADV NAVI32)  (16.0 GiB, 此刻可用 15.8 GiB, DISCRETE_GPU, vulkan device 1)
+          未选 AMD Radeon RX 7900 XTX (RADV NAVI31) (24.0 GiB, 此刻可用 1.4 GiB)
+          跳过 llvmpipe —— 软件渲染, 不是真显卡
+  内存    30.9 GiB
+  磁盘    3118.4 GiB 可用 / 需要 30 GiB
+  生图    启用
+  抠图默认档  best
+  参考音上限  30s (每秒约 0.19 GiB 显存)
+```
 
-**Reload costs nothing measurable**: the same TTS request took 3.0 s both cold and warm.
-Weights are mmap'd and sit in page cache.
+Two details in there that exist because the naive version is wrong:
 
-Requests are serialized, so peak = the single largest model = **6.80 GB**. An 8 GB card fits
-the whole stack.
+- **It skips `llvmpipe`.** The software rasterizer advertises 30.9 GiB of "VRAM" (it is your
+  system RAM) and would win any "pick the biggest card" contest. Everything would then run on
+  the CPU — working, looking completely normal, and unusably slow.
+- **It picks by free VRAM, gates by total VRAM.** On the machine above the 24 GiB card has
+  1.4 GiB actually free because another process holds it; picking by size would select it and
+  then OOM. But "is this card good enough" is a hardware question, so that one uses the total —
+  otherwise a 16 GiB card would be rejected for having a game open.
 
 ## Minimum requirements
 
 | | Minimum | Notes |
 |---|---|---|
-| **GPU** | **8 GB VRAM** | Peak is 6.80 GB (measured). Requests are serialized, so peak is one model, not the sum. |
-| **GPU API** | **Vulkan 1.2+** | AMD / NVIDIA / Intel. **No CUDA, no ROCm.** Kernels are SPIR-V compiled at runtime. |
-| **Disk** | **~25 GB** | ~18 GB weights + ~4 GB container images + engine binaries. |
-| **Host RAM** | **16 GB** (8 GB workable — see below) | Driven by transient peaks, not idle. |
-| **CPU** | any x86-64 | Background removal runs on CPU (~7 s per 1024² image). |
+| **GPU** | **8 GiB VRAM** | Peak is 6.80 GiB (measured). Requests are serialized, so peak is one model, not the sum. |
+| **GPU API** | **Vulkan 1.2+** | **No CUDA, no ROCm.** Kernels are SPIR-V compiled at runtime. |
+| **Disk** | **30 GiB during install**, 19.5 GiB after | 17.4 weights + 2.1 runtime image + 8.5 build layers (reclaimable). |
+| **Host RAM** | **16 GiB** (8 GiB workable — see below) | Driven by transient peaks, not idle. |
+| **CPU** | any x86-64 | Background removal runs on CPU. |
+
+Audio-only installs (see below) need **20 GiB during install, 9.5 GiB after**.
+
+All VRAM/RAM figures on this page are **GiB** (2³⁰ bytes), which is what `rocm-smi` and
+`vulkaninfo` report. An earlier version of this README labelled them GB; that was wrong and
+made the headroom look tighter than it is.
 
 Vulkan instead of CUDA is not a preference — it is why this runs at all. ROCm miscomputes
 VAE decode on this GPU class ([ROCm#6633](https://github.com/ROCm/ROCm/issues/6633)):
@@ -50,48 +68,91 @@ five decodes of identical input returned five mutually uncorrelated results. Vul
 compiles SPIR-V at runtime instead of looking up a per-arch kernel table, and is correct
 and faster here. The side effect is portability across all three vendors.
 
+### GPU vendors
+
+| | How the container gets the GPU | Status |
+|---|---|---|
+| **AMD** | `/dev/dri` + mesa RADV inside the image | **Tested** (RX 7800 XT, RX 7900 XTX) |
+| **Intel** | `/dev/dri` + mesa ANV inside the image — same mechanism | Untested |
+| **NVIDIA** | `nvidia-container-toolkit` injects the host driver (`docker-compose.nvidia.yml`) | Untested |
+
+I only have AMD cards, so I will not claim more than that. Nothing in the code is
+AMD-specific — no CUDA, no ROCm, no HIP, no `/dev/kfd`, no `gfx` targets — and ggml's Vulkan
+backend is widely run on NVIDIA. But "widely run" is not "I verified it".
+
+The NVIDIA path is a genuinely different wiring, not just a different card: NVIDIA's Vulkan
+ICD lives in the host driver and must be injected by `nvidia-container-toolkit`, with
+`NVIDIA_DRIVER_CAPABILITIES` including `graphics` — the default `compute,utility` gives you
+working CUDA and an empty device list in Vulkan. `continuity-setup` detects NVIDIA, uses the
+right compose overlay, and tells you the path is unverified. Reports either way are welcome.
+
 ### Host RAM in detail
 
-Idle is negligible; the peaks are what sizes the machine. Total RSS across the three
-service containers, measured:
+Idle is negligible; the peaks are what sizes the machine.
 
 | operation | peak RSS |
 |---|---|
-| idle | 0.52 GB |
-| music (30 s) | 0.50 GB |
-| speech | 1.63 GB |
-| image (1024²) | 4.94 GB |
-| `remove_bg` `quality="best"` | **7.74 GB** |
-| `remove_bg` `quality="fast"` | 1.33 GB |
+| idle | 0.52 GiB |
+| music | 0.50 GiB |
+| speech | 1.63 GiB |
+| image (1024²) | 4.94 GiB |
+| `remove_bg` `quality="best"` | **7.74 GiB** |
+| `remove_bg` `quality="fast"` | 1.33 GiB |
 
 Background removal is the ceiling, and its cost is **independent of input size** — 256 / 512 /
-1024 px all peak at ~6.8 GB, because BiRefNet runs at a fixed internal resolution. The memory
-is transient (it returns to baseline afterwards), but it must exist at that moment.
+1024 px all peak at ~6.8 GiB, because BiRefNet runs at a fixed internal resolution.
 
-**On a 16 GB machine everything works.** On **8 GB**, use `quality="fast"` (u2netp): peak
-drops to 1.33 GB and it runs in 0.6 s instead of 7.2 s.
+**On 16 GiB everything works.** Below 12 GiB, `continuity-setup` sets the default to
+`quality="fast"` (u2netp): peak drops to 1.33 GiB and it runs in 0.6 s instead of 7.2 s. On a
+typical game sprite the two are hard to tell apart by eye — checked side by side over a magenta
+backdrop with the edges zoomed. `best` remains the default where there is room, because the
+models do differ in principle on fine edges (hair, semi-transparent fringes), but treat `fast`
+as a legitimate choice rather than a degraded fallback.
 
-On a typical game sprite the two are hard to tell apart by eye — checked side by side over a
-magenta backdrop with the edges zoomed. `best` remains the default because the models do
-differ in principle on fine edges (hair, semi-transparent fringes), but treat `fast` as a
-legitimate choice rather than a degraded fallback, and check your own subject before assuming
-either way.
+## What adapts to your VRAM, and what cannot
 
-Weights are mmap'd, so beyond these peaks extra RAM only buys page cache. Without it the
-first image after eviction costs +3 s (15.0 s vs 12.0 s, measured).
+Three things scale with the card. All three thresholds are measured, not guessed:
 
-### On smaller cards
+| | Small card | Large card | Why |
+|---|---|---|---|
+| **Which half installs** | audio only (<8 GiB) | image + audio | Image generation peaks at 6.80 GiB and there is no way to shrink it — see below |
+| **Audio unloaded before image** | yes (<12 GiB) | no | Audio models stay resident; image on top of them peaks at 7.84 GiB instead of 6.80 |
+| **Reference-audio limit** | 15 s (<12 GiB) | 30 s | Reference audio costs ~0.19 GiB per second |
 
-6.80 GB is a floor for this model family, and **quantizing the diffusion model does not
-move it**: Q4_0 (2.29 GB of weights) peaks at 6.60 GB, Q8_0 (4.01 GB) at 6.59 GB — identical.
-The bottleneck is the **8 GB unquantized 4B text encoder**, not the diffusion model. Lowering
-resolution does not help either (512 / 768 / 1024 all peak identically; only time changes).
+The audio-only tier is a real product, not a consolation prize: casting voices, dialogue,
+music, SFX and cutout all work, and it fits comfortably in 4 GiB.
 
-Ship Q4_0 anyway — same VRAM, 1.7 GB less disk.
+**What does not adapt: the image model.** Quantizing it does not move VRAM at all —
+Q4_0 (2.29 GiB of weights) peaks at 6.60 GiB, Q8_0 (4.01 GiB) at 6.59 GiB, identical. Lowering
+resolution does not help either (512 / 768 / 1024 all peak the same; only time changes). The
+bottleneck is the **8 GiB unquantized 4B text encoder**, not the diffusion model. So there is
+no "medium" image tier to offer, only installed or not. (Q4_0 ships anyway — same VRAM,
+1.7 GiB less disk.)
 
-Going below 8 GB means changing the text encoder or the model family. That is possible, but
-it moves identity pinning from native `ref_images` to IP-Adapter, which is **not yet
-verified here** — and identity pinning is the whole point.
+Going below 8 GiB for images means changing the text encoder or the model family. That is
+possible, but it moves identity pinning from native `ref_images` to IP-Adapter, which is
+**not verified here** — and identity pinning is the whole point.
+
+## Zero residency
+
+Measured on an RX 7800 XT with nothing else on the card:
+
+| | GPU |
+|---|---|
+| idle | **0.21 GiB** |
+| during image generation | 6.80 GiB |
+| 2 s after it finishes | **0.21 GiB** |
+| during TTS | 2.39 GiB |
+| 120 s after TTS | **0.21 GiB** |
+
+Images are free: the engine streams weights per request and never keeps them resident.
+Audio is released by an idle timer (`AUDIO_IDLE_UNLOAD_S`, default 120 s) — not immediately,
+because someone voicing ten lines in a row should not pay a reload each time. Reload costs
+nothing measurable: the same TTS request took 3.0 s both cold and warm, because weights are
+mmap'd and sit in page cache.
+
+Requests are serialized, so peak = the single largest model. Closing the agent releases the
+VRAM too — the MCP server unloads on exit rather than leaving the engines holding it.
 
 ## Two things it actually does
 
@@ -122,13 +183,76 @@ Identity and wardrobe are separate: pin the face and build, then change clothes 
 prompt. A reference in an indigo robe, asked for `wearing heavy red armor`, comes back in
 armor with the same face.
 
+**Already cast your character somewhere else?** `import_actor` and `import_subject` pin an
+artifact you supply — a real voice recording, an ElevenLabs clip, a character sheet from
+another tool — and everything downstream behaves identically. Audio is normalized to 24 kHz
+mono for you (44.1 kHz stereo in, verified: reference f0 identical, and an imported actor
+tracks a natively-cast one to 11 Hz).
+
 **2. Degenerate output is refused.** A backend that miscomputes returns a perfectly
 well-formed all-zero WAV, or a flat grey PNG, with HTTP 200. Every artifact is checked
-(image standard deviation, audio RMS, non-finite samples) and the job fails loudly rather
-than returning `status: done` over garbage.
+(image standard deviation, audio RMS, non-finite samples) and the call fails loudly rather
+than reporting success over garbage. Cutouts additionally get a quality report — mostly
+transparent, nothing removed, subject shattered into fragments, holes eaten through the
+subject — each with a specific warning instead of a silent pass.
 
 Plus `remove_bg`: diffusion models draw "transparent background" as an opaque checkerboard;
-this turns it into a real RGBA cutout, which sprites require.
+this turns it into a real RGBA cutout, which sprites require. And `gen_sfx`, which synthesizes
+sfxr-style game SFX procedurally — bit-identical for a given seed, milliseconds, no GPU —
+because a diffusion model is the wrong instrument for a 40 ms coin pickup.
+
+## Tools
+
+19 tools. Everything returns **absolute local file paths**, not URLs — the agent and the
+engines are on the same machine, so a path can go straight into your game project without a
+download step, and there is no file server to run or misconfigure.
+
+| | |
+|---|---|
+| voice | `create_actor` `import_actor` `actor_tts` `list_actors` `delete_actor` `generate_speech` |
+| look | `create_character` `create_animal` `create_object` `import_subject` `subject_image` `list_subjects` `delete_subject` `generate_image` |
+| audio | `generate_music` `gen_sfx` |
+| post | `remove_bg` `slice_sheet` |
+| meta | `continuity_status` |
+
+`generate_image` and `generate_speech` exist for one-offs and say so in their own descriptions:
+they explicitly tell the agent that what they produce will not come back on the next call, and
+point at the pinning tools for anything recurring.
+
+## Limits, and why each one exists
+
+Every number here is a measured failure boundary, not a policy.
+
+| limit | value | what happens past it |
+|---|---|---|
+| line length | 200 chars | 600 chars wedged the GPU: `amdgpu GPU reset(6)`, device lost, an unrelated process on the *other* card killed. 200 is half the largest known-safe value. |
+| reference audio | 15 s / 30 s | ~0.19 GiB VRAM per second: 15 s → 6.59 GiB, 30 s → 9.04 GiB. Past that, voice becomes the ceiling instead of image. |
+| casting script | 45 chars | It produces the reference audio, which is then re-read on every later line. Char count is a bad proxy (60 chars measured 19.1 s, not the 13.7 s the ratio predicts), so the real duration is checked after casting and reported. |
+| image size | 1024 px | 1280 pushed VRAM to 14.5/16.4 GiB; 2048 sent the driver into `restore_userptr_worker` thrashing with the process stuck in uninterruptible `D` state — worse than a clean OOM. |
+| music length | 120 s | Not a safety limit: the engine silently truncates at 120 s and reports success. The limit turns that into an explicit `clamped` field. |
+
+Imported audio below 24 kHz is accepted but flagged: upsampling cannot restore the octave
+that was thrown away, so the clone comes out duller than the file you gave it. That is worth
+a warning rather than a silent pass — it is the same failure shape as everything else this
+plugin exists to catch.
+
+**Oversized inputs are handled differently by type, on purpose.** An image that is too large is
+resized and the result is reported back to you (`原图 2400x1600 → 存为 1024x682`) — a scaled
+picture still depicts the same thing. Reference audio that is too long is **rejected, not
+trimmed**: cutting the tail off the audio would leave the transcript describing something the
+audio no longer says, and that alignment is exactly what the cloning depends on. Trimming it
+silently would hand you an actor that imported successfully and sounds like someone else.
+
+## Bring your own backend (optional)
+
+Local engines are the default, but every backend is a URL (`SD_SERVER`, `AUDIO_SERVER`). Point
+them at your own server and the local models are never loaded. One constraint if you do: the
+audio engine resolves the reference-audio path itself, so it must see the same actors
+directory (same machine, or a shared mount).
+
+The image backend **must accept a reference image** (FLUX.2-style native `ref_images`,
+IP-Adapter, or PuLID for faces). Without it, identity pinning cannot work — and the plugin
+says so instead of silently degrading.
 
 ## Prior art
 
@@ -136,22 +260,12 @@ A survey of the current MCP ecosystem — MiniMax-MCP, openrouter-mcp-multimodal
 the dsh vision/draw plugins, and four game-asset servers — found voice cloning in several,
 **visual subject pinning in none, and output verification in none**.
 
-## Bring your own backend (optional)
-
-Local engines are the default, but every backend is a URL. Point it at your own server or any
-OpenAI-compatible provider and the local models are never loaded.
-
-One hard requirement either way: the image backend **must accept a reference image**
-(FLUX.2-style native `ref_images`, IP-Adapter, or PuLID for faces). Without it, identity
-pinning cannot work — and the plugin says so instead of silently degrading.
-
-## Status
-
-Scaffold. The implementation is being extracted from a production MCP server.
+## Layout
 
 ```
-bundle/   dsh bundle (npm) — one plugin row; dsh spawns and supervises the server below
-python/   MCP server — pinning, guardrails, verification, cutout, backend lifecycle
+bundle/   dsh bundle (npm) — one plugin row; dsh spawns and supervises the MCP server
+src/      the MCP server: pinning, guardrails, verification, cutout, VRAM lifecycle
+src/continuity_mcp/deploy/   compose + engine Dockerfile + weight manifest
 ```
 
 ## License

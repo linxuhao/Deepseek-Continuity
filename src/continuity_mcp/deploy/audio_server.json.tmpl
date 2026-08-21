@@ -1,0 +1,37 @@
+{
+  "host": "0.0.0.0",
+  "port": 9021,
+  "backend": "vulkan",
+  "device": __DEVICE__,
+  "threads": 4,
+  "lazy_load": false,
+  "models": [
+    {
+      "id": "stable-audio",
+      "family": "stable_audio",
+      "path": "/models/audio/stable-audio-3-small-music-f16.gguf",
+      "task": "gen",
+      "mode": "offline",
+      "session_options": { "stable_audio.mem_saver": true },
+      "lazy": true
+    },
+    {
+      "id": "qwen3-tts",
+      "family": "qwen3_tts",
+      "path": "/models/audio/Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF",
+      "task": "vdes",
+      "mode": "offline",
+      "session_options": { "qwen3_tts.mem_saver": true },
+      "lazy": true
+    },
+    {
+      "id": "qwen3-tts-base",
+      "family": "qwen3_tts",
+      "path": "/models/audio/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+      "task": "tts",
+      "mode": "offline",
+      "session_options": { "qwen3_tts.mem_saver": true },
+      "lazy": true
+    }
+  ]
+}

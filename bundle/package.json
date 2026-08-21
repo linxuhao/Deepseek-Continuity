@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-continuity",
-  "version": "0.0.1",
-  "description": "Local multimodal plugin for DeepSeek Harness with asset consistency: lazy-loaded models, zero VRAM when idle, and generated assets that stay the same thing across calls.",
+  "version": "0.1.0",
+  "description": "Local image/voice/music/SFX for DeepSeek Harness with asset consistency: the same character stays the same character across calls, degenerate output is refused, and the GPU is untouched when idle.",
   "type": "module",
   "files": [
     "cordis.patch.yml"
@@ -11,12 +11,20 @@
     "deepseek-harness",
     "mcp",
     "agent",
-    "assets"
+    "game-assets",
+    "text-to-speech",
+    "image-generation",
+    "vulkan"
   ],
   "license": "MIT",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "homepage": "https://github.com/linxuhao/Deepseek-Continuity",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/linxuhao/Deepseek-Continuity.git"
   }
 }

@@ -1,0 +1,61 @@
+# ==========================================
+# 两个引擎。MCP server 不在这里 —— 它由 dsh 通过 stdio 拉起 (uvx continuity-mcp),
+# 直接连这两个端口。
+#
+# 只递 /dev/dri。/dev/kfd 是 ROCm 的计算接口, 本插件不用 ROCm ——
+# 这不是偏好: ROCm 在 gfx1101 上静默算错 VAE 解码 (ROCm/ROCm#6633),
+# 同一份输入连解五次两两不相关。Vulkan/RADV 走运行时编译的 SPIR-V, 结果正确且更快。
+# 副作用是它同时能在 N 卡和 Intel 卡上跑, 因为没有一行厂商专属代码。
+#
+# 变量由 continuity-setup 写进同目录的 .env。
+# ==========================================
+services:
+  sd-server:
+    build:
+      context: .
+    image: continuity-engines:${CONTINUITY_ENGINES_TAG:-latest}
+    container_name: continuity_sd
+    profiles: ["image"]          # 显存不够时 setup 不启用这个 profile
+    ports:
+      - "127.0.0.1:${SD_PORT:-9020}:9020"
+    devices:
+      - "/dev/dri:/dev/dri"
+    group_add:
+      # 数字 gid。用名字 (video/render) 会失败 —— 容器的 group 文件里没有它们。
+      # setup 从宿主机 /dev/dri 上读出真实 gid 写进 .env。
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-993}"
+    volumes:
+      - ${CONTINUITY_MODELS_DIR}/sd:/models/sd:ro
+    command: >
+      sd-server
+      --diffusion-model /models/sd/${SD_DIFFUSION_MODEL:-flux-2-klein-4b-Q4_0.gguf}
+      --vae /models/sd/flux2-vae.safetensors
+      --llm /models/sd/qwen_3_4b.safetensors
+      --vae-format flux2 --backend vulkan${VULKAN_DEVICE:-0}
+      --diffusion-fa --offload-to-cpu --cfg-scale 1.0 --steps 4
+      --listen-ip 0.0.0.0 --listen-port 9020
+    restart: unless-stopped
+
+  audiocpp-server:
+    build:
+      context: .
+    image: continuity-engines:${CONTINUITY_ENGINES_TAG:-latest}
+    container_name: continuity_audio
+    profiles: ["audio"]
+    ports:
+      - "127.0.0.1:${AUDIO_PORT:-9021}:9021"
+    devices:
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-993}"
+    volumes:
+      - ${CONTINUITY_MODELS_DIR}/audio:/models/audio:ro
+      - ${CONTINUITY_STATE_DIR}/audio_server.json:/conf/audio_server.json:ro
+      # 克隆用的 voice_ref 是引擎自己去打开的, 所以它必须看得见同一个 actors 目录。
+      # 这是"铸声成功但说台词报文件不存在"的唯一原因。
+      - ${CONTINUITY_STATE_DIR}/actors:/actors:ro
+    command: >
+      audiocpp_server --config /conf/audio_server.json --no-ui
+    restart: unless-stopped

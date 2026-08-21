@@ -1,0 +1,46 @@
+# ==========================================
+# N 卡的设备接入方式和 A 卡 / Intel 不一样, 所以单独一个覆盖文件。
+#
+# A 卡和 Intel 的 Vulkan 驱动 (RADV / ANV) 都在 mesa 里, 镜像里装了 mesa-vulkan-drivers
+# 就有 ICD, 宿主机只要把 /dev/dri 递进来即可。
+# N 卡不是: 它的 ICD (nvidia_icd.json) 和驱动库都在宿主机驱动里, 必须由
+# nvidia-container-toolkit 在启动时注入 —— 只递 /dev/dri 的话容器里一块卡也看不见。
+# 注入还必须带 graphics 能力: 默认的 NVIDIA_DRIVER_CAPABILITIES 只有 compute+utility,
+# 那样 CUDA 能用而 Vulkan 仍然看不到设备。
+#
+# 前置: 宿主机装好 NVIDIA 驱动 + nvidia-container-toolkit。
+# 用法 (continuity-setup 探到 N 卡时会自动这么做):
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml ...
+#
+# ⚠️ 这条路径没有在 N 卡上实测过 —— 手头只有 A 卡。它是按 NVIDIA 官方文档写的,
+#    ggml 的 Vulkan 后端本身在 N 卡上是被广泛使用的, 但"广泛使用"不等于"我验过"。
+#    跑通或跑不通都欢迎开 issue 告诉我。
+# ==========================================
+services:
+  sd-server:
+    devices: !reset []
+    group_add: !reset []
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: graphics,compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  audiocpp-server:
+    devices: !reset []
+    group_add: !reset []
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: graphics,compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

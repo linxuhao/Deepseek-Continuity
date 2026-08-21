@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "权重清单。group=image 的只在显存 >= 8 GiB 时下载 —— 那是 10 GiB 的差别,",
+    "在装不了生图的机器上没有理由先下完再发现用不上。",
+    "下载走 huggingface_hub, 校验和续传由它负责, 这里不重复实现。",
+    "sd 那三个必须是 ComfyUI/BFL 单文件布局: HF 缓存里 diffusers 格式的权重不能直接用,",
+    "张量命名不同, 而且 sd.cpp 会把 diffusers VAE 误判成 FLUX.1 的 16 通道 (FLUX.2 是 32)。"
+  ],
+  "models": [
+    {
+      "group": "image",
+      "repo_id": "leejet/FLUX.2-klein-4B-GGUF",
+      "filename": "flux-2-klein-4b-Q4_0.gguf",
+      "dest": "sd/flux-2-klein-4b-Q4_0.gguf",
+      "size_bytes": 2460378560,
+      "note": "Q4_0 与 Q8_0 的显存峰值实测相同 (6.60 / 6.59 GB) —— 瓶颈是文本编码器不是它。取 Q4 只为省 1.7 GB 磁盘。"
+    },
+    {
+      "group": "image",
+      "repo_id": "Comfy-Org/flux2-klein-4B",
+      "filename": "split_files/vae/flux2-vae.safetensors",
+      "dest": "sd/flux2-vae.safetensors",
+      "size_bytes": 336211292
+    },
+    {
+      "group": "image",
+      "repo_id": "Comfy-Org/flux2-klein-4B",
+      "filename": "split_files/text_encoders/qwen_3_4b.safetensors",
+      "dest": "sd/qwen_3_4b.safetensors",
+      "size_bytes": 8044982048,
+      "note": "不量化的 4B 文本编码器 —— 8 GiB 显存门槛的真正来源。"
+    },
+    {
+      "group": "audio",
+      "repo_id": "audio-cpp/audio.cpp-gguf",
+      "filename": "stable-audio-3-small-music-f16.gguf",
+      "dest": "audio/stable-audio-3-small-music-f16.gguf",
+      "size_bytes": 2358467232
+    },
+    {
+      "group": "audio",
+      "repo_id": "audio-cpp/audio.cpp-gguf",
+      "filename": "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf",
+      "dest": "audio/Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf",
+      "size_bytes": 2816988960,
+      "note": "铸声: 一段描述 -> 一段参考音。"
+    },
+    {
+      "group": "audio",
+      "repo_id": "audio-cpp/audio.cpp-gguf",
+      "filename": "Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "dest": "audio/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "size_bytes": 2695175104,
+      "note": "配音: 照着参考音克隆 —— 音色与台词内容无关, 这是一致性的来源。"
+    }
+  ]
+}

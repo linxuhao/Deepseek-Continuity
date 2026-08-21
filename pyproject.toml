@@ -1,0 +1,37 @@
+[project]
+name = "continuity-mcp"
+version = "0.1.0"
+description = "Asset consistency and output verification for agent-generated game media. Local Vulkan backends, zero VRAM when idle."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Xuhao Lin" }]
+keywords = ["mcp", "dsh-plugin", "deepseek-harness", "game-assets", "tts", "image-generation"]
+dependencies = [
+  "mcp>=2.0",
+  "numpy",
+  "pillow",
+  # 抠图: 生图模型画出来的"透明背景"是不透明的棋盘格, 做精灵图必须转成真 RGBA
+  "rembg",
+  "onnxruntime",
+  # continuity-setup 下权重用; 校验和续传交给它, 不自己实现
+  "huggingface_hub",
+]
+
+[project.urls]
+Homepage = "https://github.com/linxuhao/Deepseek-Continuity"
+
+[project.scripts]
+continuity-mcp = "continuity_mcp.server:main"
+continuity-setup = "continuity_mcp.setup_cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/continuity_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# compose / Dockerfile / 权重清单要跟着轮子走 —— continuity-setup 靠它们干活
+"src/continuity_mcp/deploy" = "continuity_mcp/deploy"

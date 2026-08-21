@@ -1,8 +1,14 @@
 # dsh 通过内置的 mcp-client 拉起 continuity 的 MCP server, 并负责生命周期与自动重连。
 # 工具会以 mcp__continuity__<name> 出现 (create_actor / actor_tts / create_character /
-# create_object / subject_image / remove_bg / ...)。
+# import_actor / import_subject / subject_image / remove_bg / gen_sfx / ...)。
 #
-# 本插件不托管模型: 下面三个 URL 指向你自己 host 的引擎, 或任何 OpenAI 兼容的服务。
+# 后端引擎不在这里起 —— 先跑一次:
+#     uvx --from continuity-mcp continuity-setup
+# 它会体检本机 (显存/内存/磁盘)、编引擎镜像、只下这台机器用得上的权重、把两个
+# ggml/Vulkan 引擎跑起来, 并按显存把下面这些变量该设的设好。
+#
+# 下面的 env 全部可以不填: 不填就用默认值, 那套默认值对"setup 装在同一台机器上"
+# 是对的。要改的话, continuity-setup 装完会把该机器的推荐值直接打印出来。
 - insert:
     - id: continuity
       name: '@deepseek-ai/dsh-mcp-client'
@@ -11,10 +17,18 @@
         transport: stdio
         command: uvx
         args: ['continuity-mcp']
+        # env 是 z.dict(String): 值不能是 undefined, 否则整个 profile 加载失败。
+        # 所以每个都 `?? ''` —— MCP server 那边把空串当成"没设", 用它自己的默认值。
         env:
-          # OpenAI 兼容: POST {IMAGE_BACKEND_URL}/v1/images/generations
-          IMAGE_BACKEND_URL: !!js process.env.CONTINUITY_IMAGE_URL
-          # OpenAI 兼容: POST {SPEECH_BACKEND_URL}/v1/audio/speech
-          SPEECH_BACKEND_URL: !!js process.env.CONTINUITY_SPEECH_URL
-          # 参考音/定妆图存放处 —— 不可复现, 丢了就是永久丢了, 建议指向有备份的位置
-          CONTINUITY_STATE_DIR: !!js process.env.CONTINUITY_STATE_DIR
+          # 参考音和定妆图存放处 —— 不可复现, 丢了就是永久丢了, 建议指向有备份的位置
+          CONTINUITY_STATE_DIR: !!js process.env.CONTINUITY_STATE_DIR ?? ''
+          # 两个本地引擎 (continuity-setup 起的)。指向别的机器也可以, 但音频引擎要
+          # 能看见同一个 actors 目录 —— 克隆用的参考音路径是它自己去解析的。
+          SD_SERVER: !!js process.env.CONTINUITY_SD_SERVER ?? ''
+          AUDIO_SERVER: !!js process.env.CONTINUITY_AUDIO_SERVER ?? ''
+          # 显存不够装生图时 setup 会让你设 0, 那样只有音频那半的工具会注册
+          CONTINUITY_ENABLE_IMAGE: !!js process.env.CONTINUITY_ENABLE_IMAGE ?? ''
+          # best (~7.7 GiB 内存峰值) / fast (~1.3 GiB); setup 按本机内存推荐
+          CONTINUITY_CUTOUT_QUALITY: !!js process.env.CONTINUITY_CUTOUT_QUALITY ?? ''
+          # 参考音时长上限, 秒。每秒约 0.19 GiB 显存, 8 GiB 卡用 15, 大卡可以 30
+          CONTINUITY_REF_MAX_S: !!js process.env.CONTINUITY_REF_MAX_S ?? ''
