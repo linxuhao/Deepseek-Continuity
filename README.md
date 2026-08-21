@@ -73,7 +73,7 @@ To wire it by hand instead — `continuity-setup` prints this block filled in fo
           AUDIO_SERVER: !!js process.env.CONTINUITY_AUDIO_SERVER ?? ''
 ```
 
-(the complete row, with every passthrough documented: [`bundle/cordis.patch.yml`](https://github.com/linxuhao/Deepseek-Continuity/blob/main/bundle/cordis.patch.yml))
+(the complete row, with every passthrough documented: [`bundle/cordis.patch.yml`](https://github.com/linxuhao/Deepseek-Continuity/blob/main/cordis.patch.yml))
 
 `continuity-setup` checks the machine before it downloads anything, and sizes the install to
 what it finds. Run `continuity-setup --check` first to see what it would do — that reads
@@ -476,9 +476,12 @@ the dsh vision/draw plugins, and four game-asset servers — found voice cloning
 ## Layout
 
 ```
-bundle/   dsh bundle (npm) — one plugin row; dsh spawns and supervises the MCP server
-src/      the MCP server: pinning, guardrails, verification, cutout, VRAM lifecycle
-src/continuity_mcp/deploy/   compose + engine Dockerfile + weight manifest
+package.json + cordis.patch.yml   the dsh bundle (npm) — one plugin row, at the repo root
+                                  so `dsh plugin add github:...` works, not just the npm name
+src/continuity_mcp/               the MCP server: pinning, guardrails, verification, cutout,
+                                  VRAM lifecycle
+src/continuity_mcp/deploy/        compose + engine Dockerfile + weight manifest
+pyproject.toml                    the PyPI distribution (dsh-continuity)
 ```
 
 ## License
