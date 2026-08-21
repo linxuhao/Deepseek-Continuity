@@ -22,15 +22,32 @@ uvx --from dsh-continuity continuity-setup
 That one command does the whole backend: preflight → build the engines → fetch only the weights
 this machine can use → start them.
 
-> The PyPI distribution is **`dsh-continuity`** (the import name stays `continuity_mcp`). It is *not*
-> `continuity-mcp` — that name on PyPI belongs to an unrelated project, so do not `uvx
-> continuity-mcp`.
+> The PyPI distribution is [**`dsh-continuity`**](https://pypi.org/project/dsh-continuity/)
+> (the import name stays `continuity_mcp`). It is *not* `continuity-mcp` — that name on PyPI
+> belongs to an unrelated project, so do not `uvx continuity-mcp`.
 >
-> Until the first release lands, install straight from the repo — this works today:
->
-> ```bash
-> uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup
-> ```
+> To run from source instead: `uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup`
+
+Then wire it into your dsh profile's `cordis.patch.yml`. The npm bundle is not published yet,
+so add the row by hand — `continuity-setup` prints this block, filled in for your machine, when
+it finishes:
+
+```yaml
+- insert:
+    - id: continuity
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: continuity
+        transport: stdio
+        command: uvx
+        args: ['--from', 'dsh-continuity', 'continuity-mcp']
+        env:
+          CONTINUITY_STATE_DIR: !!js process.env.CONTINUITY_STATE_DIR ?? ''
+          SD_SERVER: !!js process.env.CONTINUITY_SD_SERVER ?? ''
+          AUDIO_SERVER: !!js process.env.CONTINUITY_AUDIO_SERVER ?? ''
+```
+
+(the complete row, with every passthrough documented: [`bundle/cordis.patch.yml`](https://github.com/linxuhao/Deepseek-Continuity/blob/main/bundle/cordis.patch.yml))
 
 `continuity-setup` checks the machine before it downloads anything, and sizes the install to
 what it finds. Run `continuity-setup --check` first to see what it would do — that reads
