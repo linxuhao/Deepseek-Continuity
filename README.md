@@ -367,6 +367,44 @@ download step, and there is no file server to run or misconfigure.
 they explicitly tell the agent that what they produce will not come back on the next call, and
 point at the pinning tools for anything recurring.
 
+### Two audiences per result
+
+Every tool returns **two descriptions of the same call**:
+
+| | who reads it | what it is |
+|---|---|---|
+| `content` | the LLM | the Chinese prose, `⚠️` warnings and all — unchanged, it *is* the prompt |
+| `structuredContent` | your program | a typed object; the model is in [`results.py`](src/continuity_mcp/results.py), its JSON Schema is the tool's `outputSchema` |
+
+```jsonc
+// generate_image
+{"ok": true, "error": null, "warnings": [],
+ "path": "/home/you/.continuity/generated/img_1787322514_9a3f.png",
+ "width": 1024, "height": 1024, "seed": null, "clamped": false}
+
+// remove_bg, on a bad cutout — the ⚠️ is in both halves, never only in the prose
+{"ok": true, "warnings": ["抠图结果很可能不对: 被去掉的区域细节密度是主体的 68% …"],
+ "path": "…/cut_1787322526_5381.png", "mode_used": "rembg", "model": "u2netp",
+ "transparent_ratio": 0.551}
+
+// any failure — the prose stays the instructive Chinese message that tells the LLM what to do next
+{"ok": false, "error": "actor '郭靖' 不存在 —— 先调 create_actor(…) 铸声, 再用它说台词。", "warnings": []}
+```
+
+**Do not regex the prose for paths.** That prose is a prompt: it gets reworded whenever the
+agent's behaviour needs it to be, and a regex that stops matching fails *silently* — you get an
+empty path, not an error. `ok` and `path` are the contract; the Chinese is not.
+
+The shape is uniform. `ok` is always present and is the only field worth branching on first:
+when it is `false`, only `ok` / `error` / `warnings` are meaningful and everything else is null.
+Every `⚠️` in the prose has a matching string in `warnings`. Paths are always absolute.
+
+Casting and pinning (`create_character` / `create_animal` / `create_object` / `import_subject`)
+return the reference image inline *and* structured content — those four are annotated
+`Annotated[CallToolResult, …]`, which is the one form mcp 2.0 accepts for "several content
+blocks plus a declared output schema". The models are validated on every call, so a field that
+drifts away from what the prose says raises instead of shipping.
+
 ## Limits, and why each one exists
 
 Every number here is a measured failure boundary, not a policy.
@@ -418,6 +456,39 @@ SIGTERM step, where the release would not happen at all. And it fires unconditio
 than consulting this process's own bookkeeping: VRAM belongs to the engine, which outlives any
 one server generation, so a reconnected generation has an empty ledger and would otherwise
 skip the release entirely.
+
+## Running it without dsh (streamable-http)
+
+Default transport is **stdio** and nothing about the dsh path changes — `continuity-mcp` with no
+arguments behaves exactly as before. For a caller that is not spawning the process itself (an
+HTTP shell, a second machine, several clients sharing one loaded model), run it as a
+long-lived streamable-http server:
+
+```bash
+continuity-mcp --http                                   # 127.0.0.1:9030/mcp
+continuity-mcp --http --host 127.0.0.1 --port 9030 --path /mcp   # same, spelled out
+CONTINUITY_TRANSPORT=streamable-http continuity-mcp     # env instead of flags
+```
+
+| flag | env | default |
+|---|---|---|
+| `--transport {stdio,sse,streamable-http}` (`--http` is shorthand for the last) | `CONTINUITY_TRANSPORT` | `stdio` |
+| `--host` | `CONTINUITY_HTTP_HOST` | `127.0.0.1` |
+| `--port` | `CONTINUITY_HTTP_PORT` | `9030` |
+| `--path` | `CONTINUITY_HTTP_PATH` | `/mcp` |
+
+Point an MCP client at `http://127.0.0.1:9030/mcp`.
+
+**It binds loopback by default and you should leave it there.** There is no authentication of any
+kind, and the tools write files to this machine's disk and delete actors and subjects. Binding
+`0.0.0.0` hands that to anyone on the segment — put a reverse proxy in front if you need it
+reachable. Port 9030 stays clear of the two engines (9020 / 9021).
+
+The VRAM guarantee is unchanged over HTTP: image generation and TTS still share one process-wide
+lock, so several clients connecting at once means they queue, not that two models sit on the card
+together. What HTTP *does* change is the shutdown ladder above — a long-lived server is not being
+reaped by dsh, so the models stay loaded until `AUDIO_IDLE_UNLOAD_S` (default 120 s idle) frees
+them, or until you stop the process.
 
 ## Bring your own backend (optional)
 

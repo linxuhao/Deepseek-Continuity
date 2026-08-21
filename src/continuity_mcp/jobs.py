@@ -122,7 +122,10 @@ def generate_image(prompt, width=1024, height=1024, seed=None, ref_b64=None,
         return name
     name = _run(work, needs=None)
     clamped = {"width": want_w, "height": want_h} if (want_w, want_h) != (width, height) else None
-    return {"file": name, "path": str(_out(name)), "clamped": clamped}
+    # 落盘的图已经被 _fit_size 修到 want_w x want_h, 所以这两个数就是文件的真实尺寸。
+    # 回报出去是因为结构化那份要给程序看 —— "被限制到多少"以前只写在人话里。
+    return {"file": name, "path": str(_out(name)), "width": want_w, "height": want_h,
+            "clamped": clamped}
 
 
 def subject_image(subject, scene, width=512, height=512, seed=None):

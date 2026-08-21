@@ -226,8 +226,15 @@ def _idle_loop():
     引擎持有的。上一代进程被 SIGKILL 或超时后, 模型还在引擎里占着, 新一代记账为空,
     于是"120s 后自动释放"这句话对重连之后的所有进程都是空头支票 —— 而
     continuity_status 还在照常打印它。改成: 起来先卸一次 (幂等), 之后按空闲时间卸。
-    卸载失败只 warn, 不影响任何任务。"""
+    卸载失败只 warn, 不影响任何任务。
+
+    每个空闲段只卸一次 (unloaded_for 记住是为哪一次 last_use 卸的)。原先只看
+    "距 last_use 是不是超了 120s" —— 而卸载并不更新 last_use, 所以条件一旦成立就
+    再也不会不成立: 之后每 5 秒往引擎发一次 unload_models, 一天一万七千次。
+    stdio 下看不出来, 进程跟着 dsh 会话一起没了; 而 --http 是常驻的, 它会一直发。
+    """
     first = True
+    unloaded_for = None                     # 已经为哪一次 last_use 卸过了
     while True:
         time.sleep(5 if not first else 1)
         if AUDIO_IDLE_UNLOAD_S <= 0 or _busy.is_set():
@@ -236,9 +243,12 @@ def _idle_loop():
             # 接管上一代可能留下的显存。本进程还没跑过任何任务, 卸掉不会打断谁。
             first = False
             release_all_but(None, "接管上一代", timeout=5)
+            unloaded_for = _audio_state["last_use"]
             continue
-        if time.time() - _audio_state["last_use"] >= AUDIO_IDLE_UNLOAD_S:
+        last_use = _audio_state["last_use"]
+        if last_use != unloaded_for and time.time() - last_use >= AUDIO_IDLE_UNLOAD_S:
             unload_all_audio(f"空闲 {AUDIO_IDLE_UNLOAD_S:.0f}s")
+            unloaded_for = last_use
 
 
 def start_idle_watch():

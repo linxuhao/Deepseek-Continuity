@@ -158,6 +158,17 @@ MAX_SFX_SECONDS = float(_env("MAX_SFX_SECONDS", "5"))
 INLINE_IMAGES = _env("CONTINUITY_INLINE_IMAGES", "1") not in ("0", "false", "False")
 INLINE_IMAGE_MAX = int(_env("CONTINUITY_INLINE_IMAGE_MAX", "512"))
 
+# 传输方式。默认 stdio —— dsh 是把本进程当子进程拉起来的, 换掉默认值等于把插件弄坏。
+# streamable-http 是给"不由 dsh 拉起"的调用方用的: 一个常驻进程, 多个客户端接上来。
+#
+# 默认只听 127.0.0.1。这个服务没有任何鉴权, 而它能往本机磁盘写文件、能删 actor/subject,
+# 绑到 0.0.0.0 等于把这些交给同网段的任何人 —— 要对外必须自己在前面放反向代理。
+# 端口 9030: 9020/9021 是两个引擎, 别撞上。
+TRANSPORT = _env("CONTINUITY_TRANSPORT", "stdio")
+HTTP_HOST = _env("CONTINUITY_HTTP_HOST", "127.0.0.1")
+HTTP_PORT = int(_env("CONTINUITY_HTTP_PORT", "9030"))
+HTTP_PATH = _env("CONTINUITY_HTTP_PATH", "/mcp")
+
 # 能力开关。显存不够时 continuity-setup 会关掉生图那半而保留音频那半 ——
 # 见 preflight.py: 换模型省不下显存 (Q4 与 Q8 实测同为 6.6 GB), 能省的只有"不装"。
 ENABLE_IMAGE = _env("CONTINUITY_ENABLE_IMAGE", "1") not in ("0", "false", "False")

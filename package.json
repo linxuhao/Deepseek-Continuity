@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-continuity",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local image/voice/music/SFX for DeepSeek Harness with asset consistency: the same character stays the same character across calls, degenerate output is refused, and the GPU is untouched when idle.",
   "type": "module",
   "files": [
