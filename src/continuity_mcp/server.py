@@ -9,6 +9,7 @@
 # ==========================================
 import asyncio
 import atexit
+import signal
 import base64
 import io
 import logging
@@ -573,6 +574,18 @@ def main():
         d.mkdir(parents=True, exist_ok=True)
     engines.start_idle_watch()
     atexit.register(engines.shutdown)      # 关掉 agent 也要还回显存
+    # SIGTERM 默认直接终止, atexit 不跑; 而 dsh 关掉 stdin 之后 2 秒就发 SIGTERM。
+    # 处理器里不能只 sys.exit —— SystemExit 会被 asyncio 事件循环吞掉, 进程反而挂住,
+    # 拖满 2 秒再被 SIGKILL, 比不装处理器还糟 (实测 10 秒没退)。
+    # 所以在处理器里直接把显存还掉再硬退, 那次调用自己有 1.5 秒上限。
+    def _bail(signum, _frame):
+        log.info("收到信号 %s, 释放显存后退出", signum)
+        try:
+            engines.shutdown()
+        finally:
+            os._exit(0)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, _bail)
     threading.Thread(target=_cleanup_loop, daemon=True).start()
     log.info("continuity: state=%s image=%s audio=%s", STATE_DIR, ENABLE_IMAGE, ENABLE_AUDIO)
     mcp.run(transport="stdio")

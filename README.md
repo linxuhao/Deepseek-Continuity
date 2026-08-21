@@ -391,6 +391,34 @@ trimmed**: cutting the tail off the audio would leave the transcript describing 
 audio no longer says, and that alignment is exactly what the cloning depends on. Trimming it
 silently would hand you an actor that imported successfully and sounds like someone else.
 
+## How dsh runs it
+
+Not lazily on first tool call — **at profile boot**. `dsh-mcp-client`'s `apply()` awaits the
+connection *and* the tool listing before the fiber activates, so the tools exist the moment the
+agent starts. Two consequences worth knowing:
+
+- **`failOnStartupError` defaults to `false`.** If the MCP server cannot start, the boot
+  succeeds with **zero tools registered** and nothing draws attention to it — the agent simply
+  reports that the tools do not exist. (Ask me how I know.) Set it to `true` in the row if you
+  would rather the profile refuse to boot.
+- **Reconnect is on by default**: 500 ms, doubling to a 30 s cap, 10 attempts, then it gives up
+  and unregisters the tools. Each attempt spawns a *fresh* server process.
+
+Shutdown is a three-step ladder owned by the MCP SDK, and it is why the VRAM claim above holds:
+
+| step | budget | what we do |
+|---|---|---|
+| close our stdin | 2 s | server loop ends, normal exit, `atexit` releases the models |
+| `SIGTERM` | 2 s | signal handler releases, then `os._exit` — Python would not run `atexit` here |
+| `SIGKILL` | — | nothing runs; the idle timer in the engine still frees it later |
+
+Measured: 0.16 s on the stdin path, 0.11 s on SIGTERM, both releasing. The unload call is
+capped at 1.5 s precisely because the budget is 2 — a slow engine must not push us into the
+SIGTERM step, where the release would not happen at all. And it fires unconditionally rather
+than consulting this process's own bookkeeping: VRAM belongs to the engine, which outlives any
+one server generation, so a reconnected generation has an empty ledger and would otherwise
+skip the release entirely.
+
 ## Bring your own backend (optional)
 
 There are two independent backend URLs, so **you can move one capability off-box and keep the

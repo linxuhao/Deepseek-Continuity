@@ -174,7 +174,14 @@ def mark_idle():
     _busy.clear()
 
 
-def release_all_but(keep=None, reason=""):
+# 退出时卸载的超时。dsh 的收尾是三段: 先关我们的 stdin 等 2 秒 (正常退出, atexit 会跑),
+# 不退就 SIGTERM 再等 2 秒 (Python 默认不跑 atexit), 还不退就 SIGKILL。
+# 也就是说"退出时把显存还回去"总共只有 2 秒。默认的 120 秒超时在引擎稍慢时就会冲过去,
+# 被 SIGTERM 掉 —— 显存留着不还, 而日志上什么都看不出来。
+SHUTDOWN_UNLOAD_TIMEOUT_S = 1.5
+
+
+def release_all_but(keep=None, reason="", timeout=120):
     """把除 keep 之外的模型全还回显存池。keep=None 表示全卸 (生图前就是这种)。
 
     卸载失败不让任务失败: 那只是少省一点显存, 不是错误 —— 除非显存真的不够,
@@ -188,7 +195,7 @@ def release_all_but(keep=None, reason=""):
         # retry_s=0: 这是 best-effort 的清理, 失败只是少省一点显存。早先它跟着默认值
         # 重试 180s, 于是引擎不在时, 每个任务在真正开始之前先白等三分钟。
         post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others},
-             "audiocpp-server", timeout=15, retry_s=0)
+             "audiocpp-server", timeout=timeout, retry_s=0)
         if keep is None:
             _audio_state["loaded"] = False
             log.info("音频模型已全部卸载%s, 显卡回到零常驻", f" ({reason})" if reason else "")
@@ -200,8 +207,8 @@ def release_all_but(keep=None, reason=""):
         return False
 
 
-def unload_all_audio(reason="explicit"):
-    return release_all_but(None, reason)
+def unload_all_audio(reason="explicit", timeout=15):
+    return release_all_but(None, reason, timeout=timeout)
 
 
 def _idle_loop():
@@ -224,10 +231,17 @@ def start_idle_watch():
 def shutdown():
     """MCP server 退出时把显存还回去。
 
-    dsh 通过 stdio 拉起本进程, 也会直接把它杀掉 —— 那一刻 audiocpp 容器还活着,
-    显存还占着, 而再没有人会来卸它了。没有这一步, "关掉 agent" 不等于 "还回显存"。"""
-    if _audio_state["loaded"]:
-        unload_all_audio("shutdown")
+    dsh 通过 stdio 拉起本进程, 退出时先关我们的 stdin —— 那一刻 audiocpp 容器还活着,
+    显存还占着, 而再没有人会来卸它了。没有这一步, "关掉 agent" 不等于 "还回显存"。
+    但这一步只有 2 秒 (见 SHUTDOWN_UNLOAD_TIMEOUT_S), 所以宁可放弃也不能拖着不退:
+    拖过去会被 SIGTERM, 那时 atexit 已经不会跑了, 反而一点都卸不掉。"""
+    # 不看 _audio_state["loaded"]: 那是本进程的记账, 而显存是引擎持有的, 跨进程共享。
+    # dsh 断线重连会换一个新进程, 它记账为空 —— 于是"退出时还显存"对重连之后的那一代
+    # 永远不会触发, 而引擎那边模型还占着。卸载本身是幂等的, 没有就是个空操作, 直接发。
+    if True:
+        if not unload_all_audio("shutdown", timeout=SHUTDOWN_UNLOAD_TIMEOUT_S):
+            log.warning("退出时没来得及卸载显存 —— 引擎仍占着音频模型, "
+                        "它会在 %.0fs 空闲后自己卸掉", AUDIO_IDLE_UNLOAD_S)
 
 
 # ---- 语音 ----
