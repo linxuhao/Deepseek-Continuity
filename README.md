@@ -141,7 +141,10 @@ as a legitimate choice rather than a degraded fallback.
 ## One rule, not a tier list
 
 Jobs are serialized, so **at any moment exactly one model is needed**. Everything else is
-released before the job starts. That is the whole VRAM policy.
+released before the job starts. That is the whole VRAM policy. (The one exception is a split
+deployment: if the image backend is on a different host from the audio one, they are not
+competing for a card, so nothing is released — freeing local VRAM for a remote job buys
+nothing and costs a reload.)
 
 It buys a property worth more than a few saved seconds: **peak VRAM is a constant 6.80 GiB
 regardless of what you call, in what order.** Measured over an alternating

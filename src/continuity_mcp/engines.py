@@ -243,6 +243,18 @@ def tts(model_id, req, tag="audiocpp-server"):
     return base64.b64decode(b64), res.get("timing") or {}
 
 
+def engines_share_a_gpu():
+    """两个引擎是不是在同一台机器上。
+
+    "开工前把不是这件活要用的模型卸掉" 的前提是它们抢同一张卡。生图后端被指到别的
+    机器时这个前提就没了 —— 那时卸掉本机的音频模型不省任何东西, 只是让下一次配音
+    白付一次重载。实测混合部署 (音频本机核显 / 生图远程独显) 时, 每张图前面都白卸一次。
+    同机就当成共用一张卡: 自带的 compose 里两个引擎本来就指向同一个 VULKAN_DEVICE。
+    """
+    return (urllib.parse.urlparse(SD_SERVER).hostname
+            == urllib.parse.urlparse(AUDIO_SERVER).hostname)
+
+
 def audio_engine_is_remote():
     """音频引擎是不是在别的机器上。
 

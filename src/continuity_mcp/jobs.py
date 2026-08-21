@@ -84,7 +84,8 @@ def _run(fn, *a, needs=None, **kw):
     with _gpu_lock:
         engines.mark_busy()
         try:
-            engines.release_all_but(needs, "为生图腾显存" if needs is None else "")
+            if needs is not None or engines.engines_share_a_gpu():
+                engines.release_all_but(needs, "为生图腾显存" if needs is None else "")
             return fn(*a, **kw)
         finally:
             engines.mark_idle()
