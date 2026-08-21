@@ -258,12 +258,17 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
                                if d["type"] != "CPU" and d["index"] != dev["index"]]
 
     vram = dev["vram_gib"]
-    enable_audio = want_audio and vram >= VRAM_FOR_AUDIO
-    if not enable_audio:
+    # 门槛只对"本机要装的那一半"生效。早先写成 `enable_audio = want_audio and 够显存`,
+    # 然后 not enable_audio 就抛错 —— 于是 BYO 音频 (want_audio=False) 时必然抛,
+    # 而且抛出来的是 "16.0 GiB 显存, 低于最低要求 4 GiB" 这种自相矛盾的话。
+    # --audio-server 因此从一开始就是坏的, 而我只测过 --sd-server。
+    if want_audio and vram < VRAM_FOR_AUDIO:
         raise PreflightError(
-            f"{dev['name']} 只有 {vram:.1f} GiB 显存, 低于最低要求 {VRAM_FOR_AUDIO:.0f} GiB。\n"
+            f"{dev['name']} 只有 {vram:.1f} GiB 显存, 装音频那半至少要 {VRAM_FOR_AUDIO:.0f} GiB。\n"
             f"换更小的模型省不下这部分显存 —— 实测 Q4 与 Q8 的峰值相同 (6.60 / 6.59 GiB), "
-            f"降分辨率也一样, 瓶颈是文本编码器。")
+            f"降分辨率也一样, 瓶颈是文本编码器。\n"
+            f"音频后端在别处的话, 用 --audio-server <url>。")
+    enable_audio = want_audio
     enable_image = want_image and vram >= VRAM_FOR_IMAGE
     if want_image and not enable_image:
         # 不自作主张换成另一个产品 —— setup 会把这段摆出来问一句

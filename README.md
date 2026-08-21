@@ -28,9 +28,24 @@ this machine can use → start them.
 >
 > To run from source instead: `uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup`
 
-Then wire it into your dsh profile's `cordis.patch.yml`. The npm bundle is not published yet,
-so add the row by hand — `continuity-setup` prints this block, filled in for your machine, when
-it finishes:
+Then add the plugin to your dsh profile. **`dsh plugin` shells out to pnpm**, so install that
+first if you have not (`corepack enable pnpm`); without it the command stops at
+`pnpm not found on PATH`:
+
+```bash
+dsh plugin --profile <your-profile> add dsh-plugin-continuity
+```
+
+The bundle reads its settings from the environment, so export what `continuity-setup` printed
+for your machine before booting the profile:
+
+```bash
+export CONTINUITY_STATE_DIR=~/.continuity
+export CONTINUITY_SD_SERVER=http://127.0.0.1:9020
+export CONTINUITY_AUDIO_SERVER=http://127.0.0.1:9021
+```
+
+To wire it by hand instead — `continuity-setup` prints this block filled in for your machine:
 
 ```yaml
 - insert:
