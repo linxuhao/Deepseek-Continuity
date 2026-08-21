@@ -6,6 +6,7 @@
 # ==========================================
 import base64
 import logging
+import os
 import threading
 import time
 import uuid
@@ -37,6 +38,22 @@ def _new_name(prefix, ext):
 
 def _out(name):
     return GENERATED_DIR / name
+
+
+def _commit(tmp, final, verify):
+    """先写临时文件, 校验通过再原子替换。
+
+    参考产物是这个插件的全部价值, 而它同时是"重定/重铸"要覆盖的目标。原先是
+    直接写在最终路径上再校验 —— 于是一次 force=True 重定失败, 就把一个已经用了
+    五十张图的角色的定妆图换成了那张退化图, 而 meta 没动, load_subject 照样成功,
+    之后每一张场景图都拿垃圾做参考。校验器开火反而毁掉了它要保护的东西。
+    """
+    try:
+        verify(tmp)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, final)
 
 
 def _ref_b64(path):
@@ -139,8 +156,10 @@ def create_subject(name, appearance, kind=DEFAULT_SUBJECT_KIND, width=512, heigh
     def work():
         t = time.time()
         data, _ = engines.sd_generate(f"{appearance}, {SUBJECT_FRAMING[kind]}", w, h, seed=seed)
-        png.write_bytes(data)
-        check_image(png)      # 退化的定妆图会污染这个 subject 的每一张场景图
+        tmp = png.with_suffix(".png.new")
+        tmp.write_bytes(data)
+        # 退化的定妆图会污染这个 subject 的每一张场景图, 所以校验不过就不许落到最终路径
+        _commit(tmp, png, check_image)
         meta = store.save_meta(meta_path, {"name": name, "kind": kind, "appearance": appearance,
                                            "reference_path": str(png), "seed": seed})
         log.info("[subject] 定妆 %s (%s) 完成 (%.1fs)", name, kind, time.time() - t)
@@ -167,12 +186,17 @@ def generate_music(prompt, seed=None, duration=30.0, num_inference_steps=None):
             raise RuntimeError(f"audiocpp-server returned no audio: {str(res)[:300]}")
         name = _new_name("music", "wav")
         _out(name).write_bytes(base64.b64decode(b64))
-        check_audio(_out(name))
-        log.info("[music] ok in %.1fs", time.time() - t)
-        return name
-    name = _run(work, needs=MUSIC_MODEL_ID)
-    return {"file": name, "path": str(_out(name)), "duration": secs,
-            "clamped": {"duration": secs} if secs != duration else None}
+        # 报实测时长而不是请求时长。引擎在 120s 处静默截断 (见 config.MAX_AUDIO_SECONDS),
+        # 而 check_audio 已经把真实长度算出来了 —— 原先把它扔掉、回报请求值,
+        # 等于替引擎把截断藏起来。
+        _, real = check_audio(_out(name))
+        log.info("[music] ok in %.1fs (%.1fs 音频)", time.time() - t, real)
+        return name, real
+    name, real = _run(work, needs=MUSIC_MODEL_ID)
+    short = real < secs - 1.0
+    return {"file": name, "path": str(_out(name)), "duration": real,
+            "clamped": ({"duration": secs} if secs != duration else None),
+            "truncated": (secs, real) if short else None}
 
 
 def _clip_text(text):
@@ -200,9 +224,12 @@ def create_actor(name, voice, sample_text=None, seed=None, force=False):
     def work():
         t = time.time()
         audio, tm = engines.tts(DESIGN_MODEL_ID, text, instructions=voice, seed=seed)
-        wav.write_bytes(audio)
+        tmp = wav.with_suffix(".wav.new")
+        tmp.write_bytes(audio)
         # 退化的参考音会污染这个角色的每一句台词
-        _, secs = check_audio(wav)
+        secs = {}
+        _commit(tmp, wav, lambda p: secs.setdefault("s", check_audio(p)[1]))
+        secs = secs["s"]
         meta = store.save_meta(meta_path, {
             "name": name, "voice": voice,
             "transcript": text,                     # Base 克隆要参考音的文字
@@ -336,14 +363,16 @@ def import_actor(name, audio_path, transcript, force=False):
         raise UserError(f"actor '{name}' 已存在。覆盖会让它之前所有台词的音色对不上 —— "
                         f"确实要换就传 force=True。")
     wav, meta_path = store.actor_paths(name)
+    tmp = wav.with_suffix(".wav.new")
     try:
-        secs, rate, ch = _normalize_ref_wav(src, wav)
+        secs, rate, ch = _normalize_ref_wav(src, tmp)
     except UserError:
         raise
     except Exception as e:
+        tmp.unlink(missing_ok=True)
         raise UserError(f"读不了这个 WAV ({e})。只收 16-bit PCM WAV; 其它格式先转:\n"
                         f"  ffmpeg -i {src} -acodec pcm_s16le -ac 1 -ar 24000 ref.wav")
-    check_audio(wav)
+    _commit(tmp, wav, check_audio)
     meta = store.save_meta(meta_path, {
         "name": name, "voice": f"(导入自 {src.name})", "transcript": transcript.strip(),
         "reference_path": str(wav),
@@ -385,12 +414,13 @@ def import_subject(name, image_path, appearance, kind=DEFAULT_SUBJECT_KIND, forc
             sc = MAX_IMAGE_SIZE / max(w, h)
             img = img.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
         # 存成 RGB: 带 alpha 的参考图交给引擎, 透明区会被当成黑色实心块
-        img.convert("RGB").save(png, format="PNG")
+        tmp = png.with_suffix(".png.new")
+        img.convert("RGB").save(tmp, format="PNG")
     except UserError:
         raise
     except Exception as e:
         raise UserError(f"读不了这张图: {e}")
-    check_image(png)
+    _commit(tmp, png, check_image)
     meta = store.save_meta(meta_path, {
         "name": name, "kind": kind, "appearance": appearance.strip(),
         "reference_path": str(png), "imported_from": str(src),

@@ -20,6 +20,7 @@
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -36,6 +37,11 @@ RAM_FOR_BEST_CUTOUT = 12.0    # remove_bg quality=best 实测峰值 7.74 GB
 #   构建中间层 (可回收)     8.47 GiB   <- 装完可以 docker builder prune 掉
 # 全装峰值 ~28 GiB, 回收后 ~19.5 GiB; 只装音频峰值 ~18 GiB, 回收后 ~9.5 GiB。
 # 卡在峰值上而不是终值上: 下到一半没空间比一开始就被拒绝糟糕得多。
+#
+# 这两个数字曾经少算了一整份权重: hf_hub_download 不带 local_dir 时先把文件落进
+# ~/.cache/huggingface, 我们再 copy 到目标目录 —— 同一块盘上同时存在两份。
+# 31 GiB 空闲的机器能过体检, 编完十五分钟镜像, 然后在下载中途 ENOSPC。
+# 现在下载直接写进目标目录 (见 setup_cli.download_models), 没有第二份了。
 DISK_FULL = 30.0
 DISK_AUDIO_ONLY = 20.0
 
@@ -144,10 +150,17 @@ def dri_gids():
     if dri.is_dir():
         for node in sorted(dri.iterdir()):
             try:
-                gid = os.stat(node).st_gid
+                st = os.stat(node)
             except OSError:
                 continue
-            gids.setdefault("render" if node.name.startswith("renderD") else "video", gid)
+            # 必须是字符设备。/dev/dri/ 里还有个 root 拥有的 by-path 目录, 而它按字母序
+            # 排在 card0 前面 —— 原先没这层判断, setdefault 就把 video gid 锁成了 0,
+            # 于是每次安装都 --group-add 0 (root 组), card* 节点反而进不去。
+            # A 卡上看不出来 (RADV 只要 renderD128), 但在需要 card 节点的机器上,
+            # 表现是"看不到任何 Vulkan 设备"——而那台机器其实一切正常。
+            if not stat.S_ISCHR(st.st_mode):
+                continue
+            gids.setdefault("render" if node.name.startswith("renderD") else "video", st.st_gid)
     return gids.get("video", 44), gids.get("render", 993)
 
 
@@ -289,14 +302,18 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
             f"本机内存 {ram:.1f} GiB < {RAM_FOR_BEST_CUTOUT:.0f} GiB, 抠图默认档设为 fast "
             f"(峰值 1.33 GB, 而 best 是 7.74 GB)。单次调用仍可传 quality='best' 覆盖。")
 
-    need = DISK_FULL if enable_image else DISK_AUDIO_ONLY
+    # 按本机实际要装的那几半算。原先只看 enable_image, 于是 "--audio-server + 本机生图"
+    # 会按含音频权重的 30 GiB 去卡, 而那 7.3 GiB 根本不会下。
+    need = 4.0 + (2.11 + 8.47)                       # 余量 + 运行镜像 + 构建中间层
+    need += 10.10 if want_image and enable_image else 0.0
+    need += 7.33 if want_audio else 0.0
     free = free_disk_gib(state_dir)
     report["disk_free_gib"] = free
     report["disk_need_gib"] = need
     if free < need:
         raise PreflightError(
             f"{state_dir} 所在分区只剩 {free:.1f} GiB, 需要 {need:.0f} GiB "
-            f"(权重 {'17.4' if enable_image else '7.3'} + 运行镜像 2.1 + 编译中间层 8.5 GiB;"
+            f"(本机要装的权重 + 运行镜像 2.1 + 编译中间层 8.5 GiB;"
             f" 装完 docker builder prune 能回收 8.5 GiB)。\n"
             f"换个盘: CONTINUITY_STATE_DIR=/别的/路径 continuity-setup")
     return report

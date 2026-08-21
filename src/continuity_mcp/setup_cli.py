@@ -106,13 +106,17 @@ def download_models(models_dir, groups):
         say(f"    [{i}/{len(todo)}] {m['dest']}  ({m['size_bytes'] / preflight.GIB:.2f} GiB)")
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            got = hf_hub_download(repo_id=m["repo_id"], filename=m["filename"])
+            # local_dir: 直接下到目标目录, 不经过 ~/.cache/huggingface。
+            # 原先是"下到缓存再 copy 一份", 同一块盘上同时存在两份 —— 17.4 GiB 的
+            # 安装实际要 35 GiB, 而体检只按一份算, 于是空间刚够的机器会在编完镜像、
+            # 下到一半时 ENOSPC。而且那次 copy 在 try 之外, 报出来是条裸 traceback。
+            got = hf_hub_download(repo_id=m["repo_id"], filename=m["filename"],
+                                  local_dir=str(models_dir / "_hf"))
+            Path(got).replace(dest)
         except Exception as e:
             die(f"下载 {m['repo_id']}/{m['filename']} 失败: {e}\n"
                 f"  网络不通或仓库改名了。可以手动放到 {dest} 再重跑本命令。")
-        # 复制而不是软链: 软链指向 HF 缓存, 缓存被清理时引擎会突然读不到权重,
-        # 而那时的报错是"文件不存在", 与网络问题长得一模一样。
-        shutil.copyfile(got, dest)
+    shutil.rmtree(models_dir / "_hf", ignore_errors=True)
     return total
 
 
@@ -221,8 +225,12 @@ def cmd_install(args):
     早先没有这两个选项, BYO 生图的人仍然会下 10.1 GiB 权重并起一个永远用不到的
     sd-server, 而且还得自己知道事后把 CONTINUITY_ENABLE_IMAGE 覆写回 1。
     """
-    state_dir = Path(args.state_dir).expanduser()
-    models_dir = Path(args.models_dir).expanduser() if args.models_dir else state_dir / "models"
+    # resolve(): 相对路径原样写进 compose.env 的话, compose 会按 compose 文件所在目录
+    # (site-packages 里的 deploy/) 去解释它 —— docker 会在那儿建一个空的 root 目录,
+    # 而权重好端端躺在 $PWD 下, 引擎报"文件不存在"。
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    models_dir = (Path(args.models_dir).expanduser().resolve()
+                  if args.models_dir else state_dir / "models")
     byo = {"image": args.sd_server, "audio": args.audio_server}
     local = {"image": not byo["image"] and not args.no_image, "audio": not byo["audio"]}
     if not any(local.values()):
@@ -344,8 +352,11 @@ def _print_done(state_dir, report, env, profiles, mode="dri", byo=None):
     say("本机对应的环境变量:")
     say("")
     say(f"  CONTINUITY_STATE_DIR={state_dir} \\")
-    say(f"  SD_SERVER={env['SD_SERVER']} \\")
-    say(f"  AUDIO_SERVER={env['AUDIO_SERVER']} \\")
+    # 名字必须和 cordis.patch.yml 里读的一致。patch 读 CONTINUITY_SD_SERVER,
+    # 这里原先印的是 SD_SERVER —— 照着 export 的人会让 patch 拿到空串, 回落到
+    # 127.0.0.1 默认值, 于是 BYO 明明配好了却报"连不上一个我没配过的地址"。
+    say(f"  CONTINUITY_SD_SERVER={env['SD_SERVER']} \\")
+    say(f"  CONTINUITY_AUDIO_SERVER={env['AUDIO_SERVER']} \\")
     # 按"有没有后端"判, 不是按"本机装没装" —— BYO 的那半没在 profiles 里, 但它是启用的。
     # 早先这里看 profiles, 于是 BYO 生图时同一段输出上面写"生图(BYO)"、下面写
     # ENABLE_IMAGE=0, 照着抄就把刚接好的后端关掉了。

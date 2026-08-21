@@ -26,8 +26,9 @@
         env:
           # 参考音和定妆图存放处 —— 不可复现, 丢了就是永久丢了, 建议指向有备份的位置
           CONTINUITY_STATE_DIR: !!js process.env.CONTINUITY_STATE_DIR ?? ''
-          # 两个本地引擎 (continuity-setup 起的)。指向别的机器也可以, 但音频引擎要
-          # 能看见同一个 actors 目录 —— 克隆用的参考音路径是它自己去解析的。
+          # 两个后端地址。注意宿主机侧的变量名带 CONTINUITY_ 前缀 (下面读的就是它),
+          # 传进 MCP server 时才叫 SD_SERVER / AUDIO_SERVER —— continuity-setup
+          # 打印的正是带前缀的那组, 照抄即可。
           SD_SERVER: !!js process.env.CONTINUITY_SD_SERVER ?? ''
           AUDIO_SERVER: !!js process.env.CONTINUITY_AUDIO_SERVER ?? ''
           # 显存不够装生图时 setup 会让你设 0, 那样只有音频那半的工具会注册

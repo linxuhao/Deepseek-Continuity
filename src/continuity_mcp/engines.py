@@ -36,7 +36,7 @@ from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGIN
 log = logging.getLogger("continuity")
 
 
-def _http(req, timeout, tag, retry_s=0.0):
+def _http(req, timeout, tag, retry_s=0.0, retry_timeouts=True):
     """引擎冷启动时会拒连: sd-server 要读十几 GB 权重, 宿主机重启后 page cache 是冷的,
     可能要几十秒才 listen。对连接错误重试, 对 HTTP 错误立即失败 (那是真错)。"""
     deadline = time.time() + retry_s
@@ -52,6 +52,11 @@ def _http(req, timeout, tag, retry_s=0.0):
             # 一句能直接定位问题的话, 被换成了一句什么都没说的话。
             raise EngineError(f"{tag}: {_http_detail(he)}") from he
         except (urllib.error.URLError, ConnectionError, OSError) as e:
+            # socket 超时也是 OSError。对"提交一个任务"这种非幂等请求重发, 会让引擎
+            # 排上三四份同样的活, 而我们只轮询最后一个 poll_url —— 用户等好几轮,
+            # 更糟的是引擎若并行跑, "峰值=单个模型"这条 8 GiB 设计的地基就没了。
+            if not retry_timeouts and isinstance(e, TimeoutError):
+                raise EngineUnreachable(f"{tag} 超时 ({timeout:.0f}s): {e}") from e
             if time.time() >= deadline:
                 waited = f" (已重试 {retry_s:.0f}s)" if retry_s else ""
                 hint = "" if setup_was_run() else "\n  " + SETUP_HINT
@@ -112,11 +117,12 @@ def engine_retry_budget():
     return ENGINE_WAIT_S if setup_was_run() else 0.0
 
 
-def post(url, payload, tag, timeout=None, retry_s=None):
+def post(url, payload, tag, timeout=None, retry_s=None, retry_timeouts=True):
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     return _http(req, timeout or JOB_TIMEOUT_S, tag,
-                 retry_s=engine_retry_budget() if retry_s is None else retry_s)
+                 retry_s=engine_retry_budget() if retry_s is None else retry_s,
+                 retry_timeouts=retry_timeouts)
 
 
 def get(url, timeout=30, tag="engine", retry_s=0.0):
@@ -133,7 +139,9 @@ def sd_generate(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b6
         payload["seed"] = seed
     if ref_b64:
         payload["ref_images"] = [ref_b64]             # base64 参考图 -> 图生图
-    sub = post(f"{SD_SERVER}/sdcpp/v1/img_gen", payload, "sd-server", timeout=60)
+    # 提交是非幂等的: 连不上可以重试 (还没到引擎), 但超时不行 (可能已经排上了)。
+    sub = post(f"{SD_SERVER}/sdcpp/v1/img_gen", payload, "sd-server", timeout=60,
+               retry_timeouts=False)
     poll = f"{SD_SERVER}{sub['poll_url']}"
     deadline = time.time() + JOB_TIMEOUT_S
     while True:
@@ -212,10 +220,22 @@ def unload_all_audio(reason="explicit", timeout=15):
 
 
 def _idle_loop():
-    """空闲够久就把显存还给用户 —— 他要拿这张卡打游戏。"""
+    """空闲够久就把显存还给用户 —— 他要拿这张卡打游戏。
+
+    和 shutdown() 一样, 不看 _audio_state["loaded"]: 那是本进程的记账, 而显存是
+    引擎持有的。上一代进程被 SIGKILL 或超时后, 模型还在引擎里占着, 新一代记账为空,
+    于是"120s 后自动释放"这句话对重连之后的所有进程都是空头支票 —— 而
+    continuity_status 还在照常打印它。改成: 起来先卸一次 (幂等), 之后按空闲时间卸。
+    卸载失败只 warn, 不影响任何任务。"""
+    first = True
     while True:
-        time.sleep(5)
-        if AUDIO_IDLE_UNLOAD_S <= 0 or not _audio_state["loaded"] or _busy.is_set():
+        time.sleep(5 if not first else 1)
+        if AUDIO_IDLE_UNLOAD_S <= 0 or _busy.is_set():
+            continue
+        if first:
+            # 接管上一代可能留下的显存。本进程还没跑过任何任务, 卸掉不会打断谁。
+            first = False
+            release_all_but(None, "接管上一代", timeout=5)
             continue
         if time.time() - _audio_state["last_use"] >= AUDIO_IDLE_UNLOAD_S:
             unload_all_audio(f"空闲 {AUDIO_IDLE_UNLOAD_S:.0f}s")

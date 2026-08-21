@@ -223,7 +223,11 @@ if ENABLE_AUDIO:
             r = await _go(jobs.generate_music, prompt, seed, duration, num_inference_steps)
         except Exception as e:
             return _err("音乐生成失败", e)
-        tail = f" (时长被限制到 {r['duration']:.0f}s)" if r["clamped"] else ""
+        tail = f" (请求被限制到 {r['clamped']['duration']:.0f}s)" if r["clamped"] else ""
+        if r.get("truncated"):
+            want, got = r["truncated"]
+            tail += (f"\n⚠️ 请求 {want:.0f}s, 引擎只给了 {got:.0f}s —— 它在自己的上限处"
+                     f"静默截断且不报错。需要更长就分段生成。")
         return f"音乐已生成: {r['path']} ({r['duration']:.0f}s){tail}"
 
 

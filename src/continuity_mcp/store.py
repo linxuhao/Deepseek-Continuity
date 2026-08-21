@@ -11,10 +11,24 @@ import json
 import os
 import time
 
-from .config import ACTORS_DIR, SUBJECTS_DIR
+from .config import ACTORS_DIR, SUBJECTS_DIR, NAME_RE
+
+
+def _safe(name):
+    """名字必须先过 NAME_RE 才准拼进路径。
+
+    创建那几条路径一直有这个校验, 删除那两条没有 —— 而 Path.unlink() 对 ".." 一视同仁,
+    于是 delete_actor(name="../../../某工程/package") 会删掉别人的 package.json,
+    然后回一句"已删除"。调用方是 LLM, 一个幻觉出来的名字就够了, 不需要有人使坏。
+    收在这里而不是各个工具里, 是因为所有路径都从这一个函数出去。"""
+    name = (name or "").strip()
+    if not NAME_RE.match(name):
+        raise ValueError("名字只能是字母/数字/下划线/连字符/中文, 1~40 字")
+    return name
 
 
 def _paths(base, name, ext):
+    name = _safe(name)
     return base / f"{name}.{ext}", base / f"{name}.json"
 
 
