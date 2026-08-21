@@ -116,14 +116,15 @@ def download_models(models_dir, groups):
     return total
 
 
-def write_config(state_dir, models_dir, report, args):
+def write_config(state_dir, models_dir, report, args, byo=None):
     for sub in ("actors", "subjects", "generated"):
         (state_dir / sub).mkdir(parents=True, exist_ok=True)
-    dev_index = report["device"]["index"]
+    dev_index = report.get("device", {}).get("index", 0)
     (state_dir / "audio_server.json").write_text(
         (DEPLOY / "audio_server.json.tmpl").read_text(encoding="utf-8")
         .replace("__DEVICE__", str(dev_index)), encoding="utf-8")
 
+    byo = byo or {}
     video_gid, render_gid = preflight.dri_gids()
     env = {
         "CONTINUITY_STATE_DIR": str(state_dir),
@@ -133,6 +134,9 @@ def write_config(state_dir, models_dir, report, args):
         "RENDER_GID": str(render_gid),
         "SD_PORT": str(args.sd_port),
         "AUDIO_PORT": str(args.audio_port),
+        # MCP server 要连的地址: BYO 那半是用户给的, 其余是本机起的
+        "SD_SERVER": byo.get("image") or f"http://127.0.0.1:{args.sd_port}",
+        "AUDIO_SERVER": byo.get("audio") or f"http://127.0.0.1:{args.audio_port}",
         "SD_DIFFUSION_MODEL": "flux-2-klein-4b-Q4_0.gguf",
     }
     (state_dir / "compose.env").write_text(
@@ -160,8 +164,8 @@ def wait_healthy(env, profiles, timeout=300):
     os.environ.setdefault("SD_SERVER", f"http://127.0.0.1:{env['SD_PORT']}")
     os.environ.setdefault("AUDIO_SERVER", f"http://127.0.0.1:{env['AUDIO_PORT']}")
     from . import engines
-    engines.SD_SERVER = f"http://127.0.0.1:{env['SD_PORT']}"
-    engines.AUDIO_SERVER = f"http://127.0.0.1:{env['AUDIO_PORT']}"
+    engines.SD_SERVER = env["SD_SERVER"]
+    engines.AUDIO_SERVER = env["AUDIO_SERVER"]
     deadline = time.time() + timeout
     while time.time() < deadline:
         ok, down = engines.health()
@@ -189,50 +193,89 @@ def cmd_check(args):
 
 
 def _image_exists():
-    r = subprocess.run(["docker", "image", "inspect", ENGINES_IMAGE],
+    r = subprocess.run(["docker", "image", "inspect", ENGINES_IMAGE], capture_output=True)
+    return r.returncode == 0
+
+
+def _image_is_current():
+    """镜像里该有的东西都在吗。
+
+    不比版本号, 比能力 —— 缺什么就直接查什么。目前查 model_specs/: 少了它,
+    /v1/audio/speech 会报 "model contract spec not found for family ...", 而那是唯一
+    能收内联参考音的端点, 于是配音整条路不通。
+    这一条是踩出来的: 0.1.4 之前的镜像没有它, 而 --skip-build 的人会一直留着旧镜像,
+    表现是装机一切正常、一配音就 500。"""
+    if not _image_exists():
+        return False
+    r = subprocess.run(["docker", "run", "--rm", "--entrypoint", "test", ENGINES_IMAGE,
+                        "-f", "/opt/continuity/model_specs/qwen3_tts.json"],
                        capture_output=True)
     return r.returncode == 0
 
 
 def cmd_install(args):
-    total = 5
+    """装本机后端。
+
+    "BYO 某一半" 是一等公民: --sd-server / --audio-server 给了地址, 就表示那一半你自己
+    提供 —— 这一半的权重不下、引擎不起、显存门槛也不查, 但工具照常注册。
+    早先没有这两个选项, BYO 生图的人仍然会下 10.1 GiB 权重并起一个永远用不到的
+    sd-server, 而且还得自己知道事后把 CONTINUITY_ENABLE_IMAGE 覆写回 1。
+    """
     state_dir = Path(args.state_dir).expanduser()
     models_dir = Path(args.models_dir).expanduser() if args.models_dir else state_dir / "models"
+    byo = {"image": args.sd_server, "audio": args.audio_server}
+    local = {"image": not byo["image"] and not args.no_image, "audio": not byo["audio"]}
+    if not any(local.values()):
+        say("    两半都是 BYO —— 本机不装任何引擎, 只写配置。")
 
+    total = 5
     step(1, total, "体检")
     try:
-        preflight.check_docker()
+        preflight.check_docker() if any(local.values()) else None
     except preflight.PreflightError as e:
         die(str(e))
     ram = preflight.total_ram_gib()
     free = preflight.free_disk_gib(state_dir)
     say(f"    内存 {ram:.1f} GiB, {state_dir} 所在分区可用 {free:.1f} GiB")
-    if free < preflight.DISK_AUDIO_ONLY:
-        die(f"磁盘只剩 {free:.1f} GiB, 连最小安装 ({preflight.DISK_AUDIO_ONLY:.0f} GiB) 都不够。\n"
-            f"  换个盘: continuity-setup --state-dir /别的/路径")
+    for cap, url in byo.items():
+        if url:
+            say(f"    {cap}: BYO -> {url} (本机不装这一半)")
 
-    step(2, total, "构建引擎镜像")
-    if args.skip_build and _image_exists():
-        say("    已有镜像, 跳过 (--skip-build)")
+    report = {"ram_gib": ram, "runtime_mode": "dri",
+              "cutout_quality": "best" if ram >= preflight.RAM_FOR_BEST_CUTOUT else "fast"}
+    if any(local.values()):
+        step(2, total, "构建引擎镜像")
+        if args.skip_build and _image_exists() and not _image_is_current():
+            say("    已有镜像, 但它缺 model_specs/ —— 那样配音会在 /v1/audio/speech 上 500。")
+            say("    忽略 --skip-build, 重编一次。")
+            build_engines(args.no_cache)
+        elif args.skip_build and _image_exists():
+            say("    已有镜像, 跳过 (--skip-build)")
+        else:
+            build_engines(args.no_cache)
+
+        step(3, total, "探测显卡")
+        try:
+            report = preflight.run(state_dir, image=ENGINES_IMAGE,
+                                   want_image=local["image"], want_audio=local["audio"])
+        except preflight.PreflightError as e:
+            die(str(e))
+        say(preflight.format_report(report))
+        if local["image"] and report.get("image_warning") and not args.yes:
+            # 不替用户决定: 他知道一些我不知道的事 (要不要换显卡, 是不是本来就只想要配音)
+            say("")
+            say("  ⚠️ 这张卡装不了生图那半。")
+            say("     (生图后端在别处的话, 用 --sd-server <url> 重跑 —— 那样工具照常可用。)")
+            if input("     只装音频那半 (铸声/配音/音乐/音效/抠图)? [y/N] ").strip().lower() \
+                    not in ("y", "yes"):
+                die("已取消。换一张 8 GiB 以上的卡, 或用 --sd-server 指向你自己的后端。", 0)
+            local["image"] = False
+        local["image"] = local["image"] and report.get("enable_image", False)
     else:
-        build_engines(args.no_cache)
+        say("\n[2-3/5] 不装本机引擎, 跳过镜像构建和显卡探测")
 
-    step(3, total, "探测显卡")
-    try:
-        report = preflight.run(state_dir, image=ENGINES_IMAGE,
-                               want_image=not args.no_image, want_audio=True)
-    except preflight.PreflightError as e:
-        die(str(e))
-    say(preflight.format_report(report))
-    if report.get("image_warning") and not args.yes and not args.no_image:
-        # 不替用户决定: 他知道一些我不知道的事 (要不要换显卡, 是不是只要配音)
-        say("")
-        say("  ⚠️ 这张卡装不了生图那半。")
-        if input("     只装音频那半 (铸声/配音/音乐/音效/抠图)? [y/N] ").strip().lower() \
-                not in ("y", "yes"):
-            die("已取消。换一张 8 GiB 以上的卡, 或者加 --no-image 明确只装音频。", 0)
-    if not args.yes:
-        groups = ["audio"] + (["image"] if report["enable_image"] else [])
+    groups = {c for c, v in local.items() if v}
+    if groups and not args.yes:
         manifest = json.loads((DEPLOY / "models.json").read_text(encoding="utf-8"))
         gib = sum(m["size_bytes"] for m in manifest["models"]
                   if m["group"] in groups) / preflight.GIB
@@ -241,31 +284,47 @@ def cmd_install(args):
             die("已取消。", 0)
 
     step(4, total, "下载权重")
-    groups = {"audio"} | ({"image"} if report["enable_image"] else set())
-    models_dir.mkdir(parents=True, exist_ok=True)
-    download_models(models_dir, groups)
+    if groups:
+        models_dir.mkdir(parents=True, exist_ok=True)
+        download_models(models_dir, groups)
+    else:
+        say("    没有要下的 —— 两半都是 BYO。")
 
     step(5, total, "启动引擎")
-    env = write_config(state_dir, models_dir, report, args)
+    # 能力开关看的是"有没有后端", 不是"本机装没装" —— BYO 那半照样要注册工具
+    report["enable_image"] = bool(local["image"] or byo["image"])
+    report["enable_audio"] = bool(local["audio"] or byo["audio"])
+    env = write_config(state_dir, models_dir, report, args, byo)
     profiles = sorted(groups)
     mode = report.get("runtime_mode", "dri")
-    if compose(state_dir, env, profiles, "up", "-d", mode=mode).returncode != 0:
-        die("docker compose up 失败。")
-    say("    等引擎读完权重 (冷启动要从磁盘读十几 GB, 可能几十秒)...")
-    ok, down = wait_healthy(env, profiles)
-    if not ok:
-        die("引擎起来了但没通过健康检查:\n  " + "\n  ".join(down) +
-            f"\n看日志: docker compose -p continuity logs")
+    if profiles:
+        if compose(state_dir, env, profiles, "up", "-d", mode=mode).returncode != 0:
+            die("docker compose up 失败。")
+        say("    等引擎读完权重 (冷启动要从磁盘读十几 GB, 可能几十秒)...")
+        ok, down = wait_healthy(env, profiles)
+        if not ok:
+            die("引擎起来了但没通过健康检查:\n  " + "\n  ".join(down) +
+                "\n看日志: docker compose -p continuity logs")
+    else:
+        say("    没有本机引擎要起。")
 
-    _print_done(state_dir, report, env, profiles, mode)
+    _print_done(state_dir, report, env, profiles, mode, byo)
 
 
-def _print_done(state_dir, report, env, profiles, mode="dri"):
+def _print_done(state_dir, report, env, profiles, mode="dri", byo=None):
     say("\n" + "=" * 68)
     say("装好了。")
     say("=" * 68)
-    say(f"  显卡      {report['device']['name']} ({report['device']['vram_gib']:.1f} GiB)")
-    say(f"  能力      {'生图 + 音频' if 'image' in profiles else '仅音频 (显存不足以装生图)'}")
+    byo = byo or {}
+    if report.get("device"):
+        say(f"  显卡      {report['device']['name']} ({report['device']['vram_gib']:.1f} GiB)")
+    caps = []
+    for cap, label in (("image", "生图"), ("audio", "音频")):
+        if byo.get(cap):
+            caps.append(f"{label}(BYO {byo[cap]})")
+        elif cap in profiles:
+            caps.append(f"{label}(本机)")
+    say(f"  能力      {' + '.join(caps) if caps else '(无)'}")
     say(f"  抠图默认  {report['cutout_quality']}")
     say(f"  资产目录  {state_dir}   ← 参考音和定妆图在这里, 不可复现, 记得备份")
     say("")
@@ -284,9 +343,12 @@ def _print_done(state_dir, report, env, profiles, mode="dri"):
     say("本机对应的环境变量:")
     say("")
     say(f"  CONTINUITY_STATE_DIR={state_dir} \\")
-    say(f"  SD_SERVER=http://127.0.0.1:{env['SD_PORT']} \\")
-    say(f"  AUDIO_SERVER=http://127.0.0.1:{env['AUDIO_PORT']} \\")
-    if "image" not in profiles:
+    say(f"  SD_SERVER={env['SD_SERVER']} \\")
+    say(f"  AUDIO_SERVER={env['AUDIO_SERVER']} \\")
+    # 按"有没有后端"判, 不是按"本机装没装" —— BYO 的那半没在 profiles 里, 但它是启用的。
+    # 早先这里看 profiles, 于是 BYO 生图时同一段输出上面写"生图(BYO)"、下面写
+    # ENABLE_IMAGE=0, 照着抄就把刚接好的后端关掉了。
+    if not report.get("enable_image", True):
         say("  CONTINUITY_ENABLE_IMAGE=0 \\")
     say(f"  CONTINUITY_CUTOUT_QUALITY={report['cutout_quality']} \\")
 
@@ -314,7 +376,11 @@ def main():
     ap.add_argument("--models-dir", default=os.getenv("CONTINUITY_MODELS_DIR"),
                     help="权重目录 (默认 <state-dir>/models; 权重大, 可以放别的盘)")
     ap.add_argument("--no-image", action="store_true",
-                    help="不装生图那半 (只要配音/音乐/音效/抠图)")
+                    help="不装生图那半, 并且也不用别处的 (工具不注册)")
+    ap.add_argument("--sd-server", metavar="URL",
+                    help="生图后端你自己提供 —— 本机不装这一半 (权重不下, 引擎不起), 工具照常可用")
+    ap.add_argument("--audio-server", metavar="URL",
+                    help="音频后端你自己提供 —— 本机不装这一半, 工具照常可用")
     ap.add_argument("--skip-build", action="store_true", help="已有引擎镜像就不重编")
     ap.add_argument("--no-cache", action="store_true", help="强制重编引擎镜像")
     ap.add_argument("--sd-port", type=int, default=9020)

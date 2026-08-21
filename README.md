@@ -336,10 +336,25 @@ other local**:
 | image | `SD_SERVER` | a **stable-diffusion.cpp `sd-server`** (`/sdcpp/v1/img_gen` + poll, accepts `ref_images`) |
 | audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/tasks/run`, `/v1/tasks/unload_models`) |
 
-Both are honoured identically whether you installed from PyPI or wired the dsh plugin — the
-cordis row just passes the same two variables through. Point one at another machine and its
-local models are never loaded; the other half keeps working, and `continuity_status` names
-whichever side is unreachable. `gen_sfx` needs no backend at all.
+Tell the installer which half is yours and it skips that half entirely — no weights, no engine,
+no VRAM gate — while the tools stay registered:
+
+```bash
+continuity-setup --sd-server http://your-box:9020      # 生图你自己供; 本地只装音频
+continuity-setup --audio-server http://your-box:9021   # 反过来
+```
+
+That matters more than it sounds: without it, BYO-ing the image half still downloaded **10.1 GiB**
+of image weights and started a local `sd-server` nobody would ever call, then refused to enable
+image tools because the local card was too small. On a 5.3 GiB integrated GPU, `--sd-server`
+turns "生图 显存不足" into "生图(BYO)" and downloads nothing.
+
+Note the deliberate split from `--no-image`: that one means *"I don't want this capability"*
+(tools unregistered); `--sd-server` means *"I supply this capability"* (tools work normally).
+
+Either half also works when set purely at runtime via the two env vars, whether you installed
+from PyPI or wired the dsh plugin — the cordis row passes them straight through.
+`continuity_status` names whichever side is unreachable. `gen_sfx` needs no backend at all.
 
 **Be clear about what "your own backend" means here: the same engine, elsewhere.** It is not a
 provider abstraction. The client speaks sd.cpp's and audio.cpp's specific HTTP shapes, so you
