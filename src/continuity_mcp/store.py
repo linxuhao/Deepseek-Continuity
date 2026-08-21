@@ -3,12 +3,15 @@
 #
 # 这两样东西是本插件的全部价值所在, 也是唯一不可复现的东西: 重铸/重定出来的
 # 是"另一个人"。所以这里只做最笨的事 —— 文件落盘, 不加缓存, 不做数据库。
+#
+# 参考音只由本进程读, 读出来随请求内联发给引擎。引擎不需要看见这个目录 ——
+# 早先它需要, 那是个设计错误, 代价是跨机部署下克隆整个不能用。
 # ==========================================
 import json
 import os
 import time
 
-from .config import ACTORS_DIR, SUBJECTS_DIR, ENGINE_ACTORS_DIR
+from .config import ACTORS_DIR, SUBJECTS_DIR
 
 
 def _paths(base, name, ext):
@@ -21,11 +24,6 @@ def actor_paths(name):
 
 def subject_paths(name):
     return _paths(SUBJECTS_DIR, name, "png")
-
-
-def engine_voice_ref(name):
-    """参考音在音频引擎眼里的路径。voice_ref 是交给引擎去 open 的, 不是本进程。"""
-    return f"{ENGINE_ACTORS_DIR.rstrip('/')}/{name}.wav"
 
 
 def _load(meta_path):

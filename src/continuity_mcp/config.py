@@ -1,11 +1,8 @@
 # ==========================================
 # 配置 —— 全部来自环境变量, 默认值面向"本机单卡, 引擎跑在 docker 里"。
 #
-# 目录有两套路径, 分清楚很重要:
-#   本进程看到的   {STATE_DIR}/actors/王五.wav
-#   音频引擎看到的  /actors/王五.wav        (compose 把同一个目录 bind 进容器)
-# 克隆用的 voice_ref 是交给引擎去打开的, 所以那条路径必须写引擎的视角。
-# 早期版本两边混用, 表现是"铸声成功、说台词报文件不存在"。
+# 所有目录都只有本进程会读写。参考音是读出来随请求内联发给引擎的, 引擎不需要
+# 看见任何一个本地目录 —— 这让"引擎跑在别的机器上"变成一件不需要额外配置的事。
 # ==========================================
 import os
 import re
@@ -35,9 +32,6 @@ STATE_DIR = Path(_env("CONTINUITY_STATE_DIR", "~/.continuity")).expanduser()
 ACTORS_DIR = _dir("CONTINUITY_ACTORS_DIR", STATE_DIR / "actors")
 SUBJECTS_DIR = _dir("CONTINUITY_SUBJECTS_DIR", STATE_DIR / "subjects")
 GENERATED_DIR = _dir("CONTINUITY_GENERATED_DIR", STATE_DIR / "generated")
-
-# 引擎容器里的挂载点。远程引擎 / 自定义挂载时改这两个。
-ENGINE_ACTORS_DIR = _env("CONTINUITY_ENGINE_ACTORS_DIR", "/actors")
 
 # 默认值单独留一份: engines.setup_was_run() 要靠"地址是不是还是默认的"来判断
 # 用户有没有自己接了后端。

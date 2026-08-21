@@ -226,13 +226,28 @@ the MCP server unloads on exit rather than leaving the engines holding it.
 
 **1. Identity survives across calls.** Generation backends are stateless: ask for the same
 character twice and you get two people who merely resemble each other. Measured on
-Qwen3-TTS, four lines from one voice description:
+Qwen3-TTS as pitch spread across four lines of one character — same voice description,
+same lines, the only variable being whether a reference was pinned:
+
+| voice under test | straight to the model | through Continuity |
+|---|---|---|
+| a bright narrator | 125 Hz | **5 Hz** |
+| an elderly gravelly voice | 74 Hz | **29 Hz** |
+
+Two different voices, two different magnitudes, same direction. **Read the ratio, not the
+headline number** — how far a description drifts depends on the description. And treat f0
+spread as a proxy, not the verdict: autocorrelation pitch tracking makes octave errors on low
+gravelly voices (an earlier run of the table above reported 76 Hz where the octave-corrected
+figure is 29), so the numbers above anchor each line's search range to the reference. The real
+acceptance test is listening to the audition clip, which is why `create_actor` hands you one.
+
+What the number cannot show is the part that matters most: **the drift is not random.**
 
 | | pitch spread across 4 lines |
 |---|---|
-| straight to the model (default sampling) | 125 Hz |
-| straight to the model, **greedy decoding** | **242 Hz — worse** |
-| through Continuity (pinned reference) | **5 Hz** |
+| default sampling | 125 Hz |
+| **greedy decoding** | **242 Hz — worse** |
+| pinned reference | 5 Hz |
 
 Under greedy decoding the seed is provably inert — seeds 5 / 99 / 777 produced one identical
 sha256 — so randomness was fully eliminated, and it still drifted 242 Hz. **Identity is a
@@ -333,13 +348,16 @@ IP-Adapter server and expect it to work. What it *is* good for: running the engi
 beefier box, or sharing one backend between several agents. (An earlier version of this README
 implied any reference-image-capable backend would do. That was never true of the code.)
 
-Two constraints if you go remote:
+One constraint if you go remote: identity pinning needs the image backend to accept a
+reference image. sd.cpp's `ref_images` is what the code uses; without it there is no pinning,
+which is the whole point.
 
-- The audio engine opens the reference-audio file **itself**, so it has to see the same actors
-  directory — same machine, or a shared mount. Otherwise casting succeeds and every line
-  afterwards fails on a missing file.
-- Identity pinning needs the image backend to accept a reference image. sd.cpp's `ref_images`
-  is what the code uses; without it there is no pinning, which is the whole point.
+Reference *audio* used to be a second constraint — the engine was handed a filesystem path and
+opened the file itself, so a remote audio backend meant casting succeeded and every line after
+it failed. That was not an engine limitation, it was the wrong endpoint: `/v1/audio/speech`
+takes the reference inline as base64 (5 MiB cap; a 15 s reference is ~720 KB), exactly the way
+the image path had always passed `ref_images`. Both halves are symmetric now and nothing has to
+share a directory.
 
 ## Prior art
 

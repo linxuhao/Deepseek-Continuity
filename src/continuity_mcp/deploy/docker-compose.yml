@@ -53,9 +53,8 @@ services:
     volumes:
       - ${CONTINUITY_MODELS_DIR}/audio:/models/audio:ro
       - ${CONTINUITY_STATE_DIR}/audio_server.json:/conf/audio_server.json:ro
-      # 克隆用的 voice_ref 是引擎自己去打开的, 所以它必须看得见同一个 actors 目录。
-      # 这是"铸声成功但说台词报文件不存在"的唯一原因。
-      - ${CONTINUITY_STATE_DIR}/actors:/actors:ro
+      # 不挂 actors: 参考音由 MCP server 读出来随请求内联发过去, 引擎不需要看见它。
+      # (早先是挂进来让引擎自己去 open 的 —— 那让"引擎跑在别的机器上"直接不成立。)
     command: >
       audiocpp_server --config /conf/audio_server.json --no-ui
     restart: unless-stopped

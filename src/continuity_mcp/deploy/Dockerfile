@@ -54,5 +54,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/stable-diffusion.cpp/build/bin/ /opt/continuity/bin/
 COPY --from=build /src/audio.cpp/build/linux-vulkan-release/bin/ /opt/continuity/bin/
+# model_specs 不是可选的: /v1/audio/speech 要按 family 找 model contract spec, 找不到就
+# 500 "model contract spec not found for family 'qwen3_tts'"。而那个端点是唯一支持
+# 内联 base64 参考音的 —— 少了它, 克隆就只能靠文件路径, 跨机部署直接不成立。
+# 解析器会从 cwd 逐级向上找 model_specs/<family>.json, 所以放在 WORKDIR 下即可。
+COPY --from=build /src/audio.cpp/model_specs/ /opt/continuity/model_specs/
 ENV PATH="/opt/continuity/bin:${PATH}"
 WORKDIR /opt/continuity

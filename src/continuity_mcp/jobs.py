@@ -199,27 +199,18 @@ def create_actor(name, voice, sample_text=None, seed=None, force=False):
 
     def work():
         t = time.time()
-        req = {"task_route": "vdes", "text": text, "instruct": voice}
-        if seed is not None:
-            req["seed"] = seed
-        audio, tm = engines.tts(DESIGN_MODEL_ID, req)
+        audio, tm = engines.tts(DESIGN_MODEL_ID, text, instructions=voice, seed=seed)
         wav.write_bytes(audio)
         # 退化的参考音会污染这个角色的每一句台词
         _, secs = check_audio(wav)
         meta = store.save_meta(meta_path, {
             "name": name, "voice": voice,
             "transcript": text,                     # Base 克隆要参考音的文字
-            "reference_path": str(wav),             # 本进程视角
-            "voice_ref": store.engine_voice_ref(name),   # 引擎视角 —— 两者不是一回事
-            "ref_seconds": round(secs, 1), "seed": seed})
+            "reference_path": str(wav), "ref_seconds": round(secs, 1), "seed": seed})
         log.info("[actor] 铸声 %s 完成 (%.1fs, rtf=%s)", name, time.time() - t, tm.get("rtf"))
         return meta
     meta = _run(work, needs=DESIGN_MODEL_ID)
     meta["clipped"] = clipped
-    # 铸声这一步不读参考音文件, 所以引擎在远端时它照样成功 —— 而之后每一句台词都会失败。
-    # 在还能改主意的时候说, 比等它失败之后再说有用。
-    if engines.audio_engine_is_remote():
-        meta["remote_engine"] = engines.SHARED_DIR_HINT
     # 字数卡不准时长 (实测 60 字 -> 19.1 秒), 所以铸完按真实时长再复核一次。
     # 不重铸也不失败 —— 这段参考音本身是好的, 只是之后每句台词都会比必要的贵。
     if meta["ref_seconds"] > REF_MAX_S:
@@ -239,31 +230,32 @@ def speak(text, actor=None, voice=None, seed=None, speaking_rate=None):
                             f"voice='一段声音描述') 铸声, 再用它说台词。"
                             f"现有角色: {store.actor_names() or '(还没有)'}")
         model_id = CLONE_MODEL_ID
-        req = {"task_route": "tts",
-               # 老 meta 里没有 voice_ref, 回退到按名字现算 —— 引擎视角的路径
-               "voice_ref": a.get("voice_ref") or store.engine_voice_ref(actor),
-               "reference_text": a["transcript"]}
+        # 参考音随请求一起发过去, 而不是给引擎一个路径让它自己去开。
+        #
+        # 早先给的是路径, 那条路径只有引擎解析得了 —— 引擎在别的机器上时它必然找不到,
+        # 表现是"铸声成功、之后每一句台词都 HTTP 500"。当时我把它当成引擎的限制写进了
+        # 文档, 其实是我选错了端点: /v1/audio/speech 一直支持
+        # {"type":"base64","data":...} (audio.cpp runtime.cpp), 上限 5 MiB。
+        # 我们的参考音是 24 kHz 单声道 16-bit, 15 秒也才 720 KB。
+        # 换成内联之后, "两边必须挂同一个目录"这个要求整个消失了。
+        wav, _ = store.actor_paths(actor)
+        raw = wav.read_bytes()
+        if len(raw) > MAX_VOICE_REF_BYTES:
+            raise UserError(
+                f"参考音 {len(raw)/2**20:.1f} MiB, 超过引擎 {MAX_VOICE_REF_BYTES/2**20:.0f} MiB 的上限。"
+                f"用更短的参考音重铸 —— 3~10 秒就足够定住音色。")
+        kw = {"voice_ref_b64": base64.b64encode(raw).decode(),
+              "reference_text": a["transcript"]}
     else:
         # 一次性旁白: VoiceDesign 直接从描述生成, 不保证跨句音色一致
         model_id = DESIGN_MODEL_ID
-        req = {"task_route": "vdes", "instruct": voice or DEFAULT_VOICE}
+        kw = {"instructions": voice or DEFAULT_VOICE}
     clipped_text, clipped = _clip_text(text)
-    req["text"] = clipped_text
-    if seed is not None:
-        req["seed"] = seed
-    if speaking_rate:
-        req["speaking_rate"] = speaking_rate
 
     def work():
         t = time.time()
-        try:
-            audio, tm = engines.tts(model_id, req)
-        except engines.EngineError as e:
-            # 引擎打不开参考音 = 它看不见我们写的那个目录。这是跨机部署最常踩的一脚,
-            # 而引擎的原话 ("could not open WAV input: ...") 只说了现象没说原因。
-            if actor and "open" in str(e).lower() and "wav" in str(e).lower():
-                raise UserError(f"{e}\n  {engines.SHARED_DIR_HINT}") from e
-            raise
+        audio, tm = engines.tts(model_id, clipped_text, seed=seed,
+                                speaking_rate=speaking_rate, **kw)
         name = _new_name("speech", "wav")
         _out(name).write_bytes(audio)
         check_audio(_out(name))
@@ -279,6 +271,9 @@ def speak(text, actor=None, voice=None, seed=None, speaking_rate=None):
 # 用别的工具做好的角色照样能在这里保持一致。
 
 REF_RATE = 24000            # 克隆参考音的采样率
+# 引擎对内联参考音的硬上限 (audio.cpp: kMaxVoiceRefBytes)。我们的 REF_MAX_S 让实际
+# 大小停在 720 KB 左右, 这个检查只是为了在超限时说人话而不是 HTTP 500。
+MAX_VOICE_REF_BYTES = 5 * 1024 * 1024
 
 
 def _normalize_ref_wav(src, dst):
@@ -351,7 +346,7 @@ def import_actor(name, audio_path, transcript, force=False):
     check_audio(wav)
     meta = store.save_meta(meta_path, {
         "name": name, "voice": f"(导入自 {src.name})", "transcript": transcript.strip(),
-        "reference_path": str(wav), "voice_ref": store.engine_voice_ref(name),
+        "reference_path": str(wav),
         "imported_from": str(src), "source_format": f"{rate} Hz / {ch} ch / {secs:.1f}s",
         "ref_seconds": round(secs, 1)})
     # 升采样补不回丢掉的高频。不拦, 但一定要说 —— 否则就是又一个"导入成功、

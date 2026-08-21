@@ -232,11 +232,36 @@ def shutdown():
 
 # ---- 语音 ----
 
-def tts(model_id, req, tag="audiocpp-server"):
+def tts(model_id, text, voice_ref_b64=None, reference_text=None, instructions=None,
+        seed=None, speaking_rate=None, tag="audiocpp-server"):
+    """合成一句语音。
+
+    走 /v1/audio/speech 而不是 /v1/tasks/run, 因为只有前者能收内联的参考音 ——
+    后者的 voice_ref 只认路径, 而路径只有引擎自己解析得了, 于是引擎一旦不在本机,
+    克隆就整个不成立。这曾被我当成引擎的限制写进文档, 其实是选错了端点。
+    (该端点需要 model_specs/<family>.json, 见 deploy/Dockerfile。)
+    """
     release_all_but(model_id)
-    req["max_tokens"] = max(64, min(SPEECH_MAX_TOKENS,
-                                    int(len(req["text"]) * SPEECH_TOKENS_PER_CHAR)))
-    res = post(f"{AUDIO_SERVER}/v1/tasks/run", {"model": model_id, "request": req}, tag)
+    body = {
+        "model": model_id,
+        "input": text,
+        "response_format": "b64_json",
+        # 字数上限只挡"输入长", 挡不住"输出跑飞": 一句短台词退化成循环照样能生成几分钟
+        # 并拖挂 GPU。按字数推 token 预算, 让跑飞的请求早早自己停下。
+        "max_tokens": max(64, min(SPEECH_MAX_TOKENS,
+                                  int(len(text) * SPEECH_TOKENS_PER_CHAR))),
+    }
+    if voice_ref_b64 is not None:
+        body["voice_ref"] = {"type": "base64", "data": voice_ref_b64}
+    if reference_text:
+        body["reference_text"] = reference_text
+    if instructions:
+        body["instructions"] = instructions
+    if seed is not None:
+        body["seed"] = seed
+    if speaking_rate:
+        body["options"] = {"speaking_rate": speaking_rate}
+    res = post(f"{AUDIO_SERVER}/v1/audio/speech", body, tag)
     b64 = res.get("audio")
     if not b64:
         raise RuntimeError(f"{model_id} returned no audio: {str(res)[:300]}")
@@ -253,27 +278,6 @@ def engines_share_a_gpu():
     """
     return (urllib.parse.urlparse(SD_SERVER).hostname
             == urllib.parse.urlparse(AUDIO_SERVER).hostname)
-
-
-def audio_engine_is_remote():
-    """音频引擎是不是在别的机器上。
-
-    用来判断"参考音这条路径引擎大概率看不见" —— 它是引擎自己去 open 的, 跨机就一定
-    找不到, 除非两边挂了同一个目录。"""
-    host = urllib.parse.urlparse(AUDIO_SERVER).hostname or ""
-    return host not in ("127.0.0.1", "localhost", "::1", "")
-
-
-SHARED_DIR_HINT = (
-    "克隆用的参考音是音频引擎自己去打开的, 不是本进程读了发过去的。"
-    "引擎在另一台机器上时, 它看不见本机的 actors 目录 —— 铸声会成功 (那一步不读文件), "
-    "而之后每一句台词都会失败。\n"
-    "  要么把引擎跑在本机 (uvx --from dsh-continuity continuity-setup), "
-    "要么让引擎挂载同一个 actors 目录, 并用 CONTINUITY_ENGINE_ACTORS_DIR 告诉本插件"
-    "它在引擎那边的路径。"
-
-
-)
 
 
 def health():
