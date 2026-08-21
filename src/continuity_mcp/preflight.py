@@ -315,10 +315,17 @@ def format_report(r):
         out.append(f"          跳过 {s['name']} —— 软件渲染, 不是真显卡")
     out.append(f"  内存    {r['ram_gib']:.1f} GiB")
     out.append(f"  磁盘    {r['disk_free_gib']:.1f} GiB 可用 / 需要 {r['disk_need_gib']:.0f} GiB")
-    out.append(f"  生图    {'启用' if r['enable_image'] else '显存不足'}")
+    # BYO 的那半不是"未启用" —— 它由别处提供。这两个说法在同一次运行里出现过:
+    # 体检说"音频 未启用", 结尾说"音频(BYO ...)", 看的人只会以为出了岔子。
+    byo = r.get("byo") or {}
+    def cap(key, ok, bad):
+        if byo.get(key):
+            return f"BYO -> {byo[key]}"
+        return ok if r.get(f"enable_{key}") else bad
+    out.append(f"  生图    {cap('image', '本机', '显存不足')}")
     if r.get("image_warning"):
         out.append(f"          {r['image_warning']}")
-    out.append(f"  音频    {'启用' if r['enable_audio'] else '未启用'}")
+    out.append(f"  音频    {cap('audio', '本机', '未启用')}")
     out.append(f"  抠图默认档  {r['cutout_quality']}")
     if r.get("cutout_reason"):
         out.append(f"          {r['cutout_reason']}")

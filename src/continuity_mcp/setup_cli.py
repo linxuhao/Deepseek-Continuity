@@ -260,6 +260,7 @@ def cmd_install(args):
                                    want_image=local["image"], want_audio=local["audio"])
         except preflight.PreflightError as e:
             die(str(e))
+        report["byo"] = {k: v for k, v in byo.items() if v}
         say(preflight.format_report(report))
         if local["image"] and report.get("image_warning") and not args.yes:
             # 不替用户决定: 他知道一些我不知道的事 (要不要换显卡, 是不是本来就只想要配音)

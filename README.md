@@ -36,6 +36,17 @@ first if you have not (`corepack enable pnpm`); without it the command stops at
 dsh plugin --profile <your-profile> add dsh-plugin-continuity
 ```
 
+Add it to a profile that already has an app bundle. If you point it at a *new* profile, `dsh`
+creates one containing only `@deepseek-ai/dsh-base` plus this plugin — no app, so booting it
+does nothing and hangs. Add the app yourself in
+`~/.dsh/profiles/<name>/package.json`:
+
+```json
+"dsh": { "profile": { "bundles": [
+  "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless", "dsh-plugin-continuity"
+] } }
+```
+
 The bundle reads its settings from the environment, so export what `continuity-setup` printed
 for your machine before booting the profile:
 
