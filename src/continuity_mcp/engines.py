@@ -80,10 +80,21 @@ def _http_detail(he):
         body = he.read().decode("utf-8", "replace")
     except Exception:
         return f"HTTP {he.code} {he.reason}"
+    # error 可能是字符串也可能是对象: sd_server 回 {"error": "invalid generation parameters"},
+    # 而对 str 调 .get 会抛 AttributeError —— 以前那版就是这么被 except 吞掉的, 于是
+    # "取出错误消息"这件事对这个引擎从来没成功过, 却一声不响地吐回整个 JSON。
+    msg = None
     try:
-        msg = (json.loads(body).get("error") or {}).get("message")
+        d = json.loads(body)
+        for k in ("error", "message", "detail"):
+            v = d.get(k)
+            if isinstance(v, dict):
+                v = v.get("message") or v.get("detail")
+            if isinstance(v, str) and v.strip():
+                msg = v.strip()
+                break
     except Exception:
-        msg = None
+        pass
     # 无冒号 —— 和 media-gen 的 "HTTP 400 <msg>" 逐字一致。外壳两边都要解析这一行,
     # 格式漂开一个冒号就够让它判错。
     return f"HTTP {he.code} {(msg or body or he.reason)[:400]}"
