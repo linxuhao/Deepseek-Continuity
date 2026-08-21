@@ -55,6 +55,29 @@ def build_engines(no_cache=False):
         die("引擎镜像构建失败。上面的日志里通常直接写着缺哪个包。")
 
 
+def verify_manifest(todo):
+    """下载之前先把每个 URL 都 HEAD 一遍。
+
+    存在的意义: 清单里的路径写错时, 原先要下到那一个才炸 —— 前面几 GiB 白下, 而且
+    只报第一个错。一次性验完, 一次说清哪几条不对。
+    (这条检查是有来历的: 0.1.1 的清单把 stable-audio 的路径少写了一层子目录,
+     而我历次测试都用硬链接预置好了权重, 从来没真正走过下载这条路。)"""
+    import urllib.error
+    import urllib.request
+    bad = []
+    for m in todo:
+        url = f"https://huggingface.co/{m['repo_id']}/resolve/main/{m['filename']}"
+        req = urllib.request.Request(url, method="HEAD")
+        try:
+            urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as e:
+            if e.code not in (301, 302, 307, 308):
+                bad.append(f"{m['repo_id']}/{m['filename']} -> HTTP {e.code}")
+        except Exception as e:
+            bad.append(f"{m['repo_id']}/{m['filename']} -> {e}")
+    return bad
+
+
 def download_models(models_dir, groups):
     try:
         from huggingface_hub import hf_hub_download
@@ -64,6 +87,16 @@ def download_models(models_dir, groups):
     manifest = json.loads((DEPLOY / "models.json").read_text(encoding="utf-8"))
     todo = [m for m in manifest["models"] if m["group"] in groups]
     total = sum(m["size_bytes"] for m in todo) / preflight.GIB
+    missing = [m for m in todo
+               if not (models_dir / m["dest"]).exists()
+               or (models_dir / m["dest"]).stat().st_size != m["size_bytes"]]
+    if missing:
+        say(f"    先核对 {len(missing)} 个待下载文件的地址...")
+        bad = verify_manifest(missing)
+        if bad:
+            die("权重清单里的这些地址取不到:\n  " + "\n  ".join(bad) +
+                "\n上游仓库可能改了路径。请开 issue: "
+                "https://github.com/linxuhao/Deepseek-Continuity/issues")
     say(f"    需要 {len(todo)} 个文件, 共 {total:.1f} GiB。已经下过的会跳过。")
     for i, m in enumerate(todo, 1):
         dest = models_dir / m["dest"]

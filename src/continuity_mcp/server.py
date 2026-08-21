@@ -78,6 +78,8 @@ if ENABLE_AUDIO:
                 % len(m["transcript"])) if m.get("clipped") else ""
         if m.get("too_long"):
             clip += f"\n⚠️ {m['too_long']}"
+        if m.get("remote_engine"):
+            clip += f"\n⚠️ {m['remote_engine']}"
         return (f"角色 '{m['name']}' 已铸声 (参考音 {m['ref_seconds']:.1f}s)。\n"
                 f"试音: {m['reference_path']}\n"
                 f"(念的是: {m['transcript']}){clip}\n"

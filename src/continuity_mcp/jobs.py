@@ -215,6 +215,10 @@ def create_actor(name, voice, sample_text=None, seed=None, force=False):
         return meta
     meta = _run(work, needs=DESIGN_MODEL_ID)
     meta["clipped"] = clipped
+    # 铸声这一步不读参考音文件, 所以引擎在远端时它照样成功 —— 而之后每一句台词都会失败。
+    # 在还能改主意的时候说, 比等它失败之后再说有用。
+    if engines.audio_engine_is_remote():
+        meta["remote_engine"] = engines.SHARED_DIR_HINT
     # 字数卡不准时长 (实测 60 字 -> 19.1 秒), 所以铸完按真实时长再复核一次。
     # 不重铸也不失败 —— 这段参考音本身是好的, 只是之后每句台词都会比必要的贵。
     if meta["ref_seconds"] > REF_MAX_S:
@@ -251,7 +255,14 @@ def speak(text, actor=None, voice=None, seed=None, speaking_rate=None):
 
     def work():
         t = time.time()
-        audio, tm = engines.tts(model_id, req)
+        try:
+            audio, tm = engines.tts(model_id, req)
+        except engines.EngineError as e:
+            # 引擎打不开参考音 = 它看不见我们写的那个目录。这是跨机部署最常踩的一脚,
+            # 而引擎的原话 ("could not open WAV input: ...") 只说了现象没说原因。
+            if actor and "open" in str(e).lower() and "wav" in str(e).lower():
+                raise UserError(f"{e}\n  {engines.SHARED_DIR_HINT}") from e
+            raise
         name = _new_name("speech", "wav")
         _out(name).write_bytes(audio)
         check_audio(_out(name))

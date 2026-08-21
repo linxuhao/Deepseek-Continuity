@@ -3,6 +3,7 @@
     "权重清单。group=image 的只在显存 >= 8 GiB 时下载 —— 那是 10 GiB 的差别,",
     "在装不了生图的机器上没有理由先下完再发现用不上。",
     "下载走 huggingface_hub, 校验和续传由它负责, 这里不重复实现。",
+    "filename 是仓库内的完整路径, 不是文件名 —— 这个仓库把每个模型放在自己的子目录里。",
     "sd 那三个必须是 ComfyUI/BFL 单文件布局: HF 缓存里 diffusers 格式的权重不能直接用,",
     "张量命名不同, 而且 sd.cpp 会把 diffusers VAE 误判成 FLUX.1 的 16 通道 (FLUX.2 是 32)。"
   ],
@@ -33,7 +34,7 @@
     {
       "group": "audio",
       "repo_id": "audio-cpp/audio.cpp-gguf",
-      "filename": "stable-audio-3-small-music-f16.gguf",
+      "filename": "Stable-Audio-3-Small-Music-GGUF/stable-audio-3-small-music-f16.gguf",
       "dest": "audio/stable-audio-3-small-music-f16.gguf",
       "size_bytes": 2358467232
     },

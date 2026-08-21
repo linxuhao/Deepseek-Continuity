@@ -26,6 +26,7 @@ import logging
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
@@ -44,8 +45,12 @@ def _http(req, timeout, tag, retry_s=0.0):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read())
-        except urllib.error.HTTPError:
-            raise
+        except urllib.error.HTTPError as he:
+            # 一定要把引擎自己说的那句读出来。原先这里直接 raise, 于是
+            #   {"error":{"message":"could not open WAV input: /actors/xxx.wav"}}
+            # 变成了调用方看到的 "HTTP Error 500: Internal Server Error" ——
+            # 一句能直接定位问题的话, 被换成了一句什么都没说的话。
+            raise EngineError(f"{tag}: {_http_detail(he)}") from he
         except (urllib.error.URLError, ConnectionError, OSError) as e:
             if time.time() >= deadline:
                 waited = f" (已重试 {retry_s:.0f}s)" if retry_s else ""
@@ -58,6 +63,23 @@ def _http(req, timeout, tag, retry_s=0.0):
 
 class EngineUnreachable(RuntimeError):
     """引擎连不上。"""
+
+
+class EngineError(RuntimeError):
+    """引擎收到了请求但拒绝/失败了 —— 消息里带着它自己的说法。"""
+
+
+def _http_detail(he):
+    """把引擎返回体里的错误消息取出来。"""
+    try:
+        body = he.read().decode("utf-8", "replace")
+    except Exception:
+        return f"HTTP {he.code} {he.reason}"
+    try:
+        msg = (json.loads(body).get("error") or {}).get("message")
+    except Exception:
+        msg = None
+    return f"HTTP {he.code}: {(msg or body or he.reason)[:400]}"
 
 
 SETUP_HINT = (
@@ -219,6 +241,27 @@ def tts(model_id, req, tag="audiocpp-server"):
     if not b64:
         raise RuntimeError(f"{model_id} returned no audio: {str(res)[:300]}")
     return base64.b64decode(b64), res.get("timing") or {}
+
+
+def audio_engine_is_remote():
+    """音频引擎是不是在别的机器上。
+
+    用来判断"参考音这条路径引擎大概率看不见" —— 它是引擎自己去 open 的, 跨机就一定
+    找不到, 除非两边挂了同一个目录。"""
+    host = urllib.parse.urlparse(AUDIO_SERVER).hostname or ""
+    return host not in ("127.0.0.1", "localhost", "::1", "")
+
+
+SHARED_DIR_HINT = (
+    "克隆用的参考音是音频引擎自己去打开的, 不是本进程读了发过去的。"
+    "引擎在另一台机器上时, 它看不见本机的 actors 目录 —— 铸声会成功 (那一步不读文件), "
+    "而之后每一句台词都会失败。\n"
+    "  要么把引擎跑在本机 (uvx --from dsh-continuity continuity-setup), "
+    "要么让引擎挂载同一个 actors 目录, 并用 CONTINUITY_ENGINE_ACTORS_DIR 告诉本插件"
+    "它在引擎那边的路径。"
+
+
+)
 
 
 def health():
