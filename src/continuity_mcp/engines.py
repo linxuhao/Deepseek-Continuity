@@ -29,7 +29,8 @@ import urllib.error
 import urllib.request
 
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
-                     AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS)
+                     AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
+                     STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER)
 
 log = logging.getLogger("continuity")
 
@@ -47,21 +48,53 @@ def _http(req, timeout, tag, retry_s=0.0):
             raise
         except (urllib.error.URLError, ConnectionError, OSError) as e:
             if time.time() >= deadline:
-                raise EngineUnreachable(f"{tag} 不可达 (已重试 {retry_s:.0f}s): {e}") from e
+                waited = f" (已重试 {retry_s:.0f}s)" if retry_s else ""
+                hint = "" if setup_was_run() else "\n  " + SETUP_HINT
+                raise EngineUnreachable(f"{tag} 连不上{waited}: {e}{hint}") from e
             log.warning("[%s] 未就绪, %.1fs 后重试: %s", tag, delay, e)
             time.sleep(delay)
             delay = min(delay * 2, 5.0)
 
 
 class EngineUnreachable(RuntimeError):
-    """引擎没起来 —— 多半是 docker compose 没 up, 或者还在读权重。"""
+    """引擎连不上。"""
+
+
+SETUP_HINT = (
+    "看起来后端还没装 —— 这个插件只是前半截, 两个 ggml/Vulkan 引擎要先装起来:\n"
+    "    uvx --from dsh-continuity continuity-setup\n"
+    "  它会体检本机、编引擎镜像、下权重并把引擎跑起来。装好之后本插件的工具才有东西可用。"
+)
+
+
+def _engines_are_default():
+    return (SD_SERVER == DEFAULT_SD_SERVER) and (AUDIO_SERVER == DEFAULT_AUDIO_SERVER)
+
+
+def setup_was_run():
+    """这台机器上把后端准备好了没有。
+
+    用来区分两件长得一样、处理方式完全相反的事:
+      准备过但连不上  -> 多半是冷启动在读十几 GB 权重, 值得等满 ENGINE_WAIT_S
+      压根没准备过    -> 等三分钟也不会有人来, 立刻失败并告诉他去装
+    早先两者是一个分支, 于是"只装了 dsh 插件、没跑 setup"的人每调一次工具要白等 3 分钟,
+    而 npm 那条安装路径恰好最容易走成这样。
+
+    "准备过"有两种: 跑过 continuity-setup (state_dir 里留下 compose.env), 或者自己
+    把引擎地址指到了别处 (自建/远程后端)。后一种也要算, 否则会对着一个自带后端的人
+    喊"去跑 continuity-setup" —— 那对他是错的建议, 而错的建议比没有建议更糟。"""
+    return (STATE_DIR / "compose.env").is_file() or not _engines_are_default()
+
+
+def engine_retry_budget():
+    return ENGINE_WAIT_S if setup_was_run() else 0.0
 
 
 def post(url, payload, tag, timeout=None, retry_s=None):
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     return _http(req, timeout or JOB_TIMEOUT_S, tag,
-                 retry_s=ENGINE_WAIT_S if retry_s is None else retry_s)
+                 retry_s=engine_retry_budget() if retry_s is None else retry_s)
 
 
 def get(url, timeout=30, tag="engine", retry_s=0.0):
@@ -130,14 +163,18 @@ def release_all_but(keep=None, reason=""):
     if not others:
         return True
     try:
+        # retry_s=0: 这是 best-effort 的清理, 失败只是少省一点显存。早先它跟着默认值
+        # 重试 180s, 于是引擎不在时, 每个任务在真正开始之前先白等三分钟。
         post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others},
-             "audiocpp-server", timeout=120, retry_s=0 if keep is None else ENGINE_WAIT_S)
+             "audiocpp-server", timeout=15, retry_s=0)
         if keep is None:
             _audio_state["loaded"] = False
             log.info("音频模型已全部卸载%s, 显卡回到零常驻", f" ({reason})" if reason else "")
         return True
-    except Exception:
-        log.warning("卸载 %s 失败, 继续", others, exc_info=True)
+    except Exception as e:
+        # 只取第一行: 引擎不在时异常里带着"去跑 continuity-setup"的整段指引, 而这里
+        # 只是一次可有可无的清理 —— 该说那段话的是真正失败的那次调用, 不是它。
+        log.warning("卸载 %s 失败, 继续: %s", others, str(e).splitlines()[0])
         return False
 
 
@@ -185,12 +222,15 @@ def tts(model_id, req, tag="audiocpp-server"):
 
 
 def health():
-    """两个引擎在不在。返回 (ok, [坏掉的描述])。"""
+    """两个引擎在不在。返回 (ok, [坏掉的名字])。
+
+    只返回名字, 不返回长报错: 每条都带一遍"去跑 continuity-setup"的话, 两个引擎
+    就是两遍, 而 continuity_status 自己还会再说一遍。提示只该出现一次。"""
     down = []
     for name, url in (("sd-server", f"{SD_SERVER}/sdcpp/v1/capabilities"),
                       ("audiocpp-server", f"{AUDIO_SERVER}/health")):
         try:
             get(url, timeout=5, tag=name)
-        except Exception as e:
-            down.append(f"{name}: {e}")
+        except Exception:
+            down.append(name)
     return (not down), down

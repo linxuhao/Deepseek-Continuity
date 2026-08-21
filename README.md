@@ -310,14 +310,33 @@ silently would hand you an actor that imported successfully and sounds like some
 
 ## Bring your own backend (optional)
 
-Local engines are the default, but every backend is a URL (`SD_SERVER`, `AUDIO_SERVER`). Point
-them at your own server and the local models are never loaded. One constraint if you do: the
-audio engine resolves the reference-audio path itself, so it must see the same actors
-directory (same machine, or a shared mount).
+There are two independent backend URLs, so **you can move one capability off-box and keep the
+other local**:
 
-The image backend **must accept a reference image** (FLUX.2-style native `ref_images`,
-IP-Adapter, or PuLID for faces). Without it, identity pinning cannot work — and the plugin
-says so instead of silently degrading.
+| | env var | what it must be |
+|---|---|---|
+| image | `SD_SERVER` | a **stable-diffusion.cpp `sd-server`** (`/sdcpp/v1/img_gen` + poll, accepts `ref_images`) |
+| audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/tasks/run`, `/v1/tasks/unload_models`) |
+
+Both are honoured identically whether you installed from PyPI or wired the dsh plugin — the
+cordis row just passes the same two variables through. Point one at another machine and its
+local models are never loaded; the other half keeps working, and `continuity_status` names
+whichever side is unreachable. `gen_sfx` needs no backend at all.
+
+**Be clear about what "your own backend" means here: the same engine, elsewhere.** It is not a
+provider abstraction. The client speaks sd.cpp's and audio.cpp's specific HTTP shapes, so you
+cannot point `SD_SERVER` at an OpenAI-compatible endpoint, a ComfyUI instance, or a bare
+IP-Adapter server and expect it to work. What it *is* good for: running the engines on a
+beefier box, or sharing one backend between several agents. (An earlier version of this README
+implied any reference-image-capable backend would do. That was never true of the code.)
+
+Two constraints if you go remote:
+
+- The audio engine opens the reference-audio file **itself**, so it has to see the same actors
+  directory — same machine, or a shared mount. Otherwise casting succeeds and every line
+  afterwards fails on a missing file.
+- Identity pinning needs the image backend to accept a reference image. sd.cpp's `ref_images`
+  is what the code uses; without it there is no pinning, which is the whole point.
 
 ## Prior art
 

@@ -39,8 +39,12 @@ GENERATED_DIR = _dir("CONTINUITY_GENERATED_DIR", STATE_DIR / "generated")
 # 引擎容器里的挂载点。远程引擎 / 自定义挂载时改这两个。
 ENGINE_ACTORS_DIR = _env("CONTINUITY_ENGINE_ACTORS_DIR", "/actors")
 
-SD_SERVER = _env("SD_SERVER", "http://127.0.0.1:9020")
-AUDIO_SERVER = _env("AUDIO_SERVER", "http://127.0.0.1:9021")
+# 默认值单独留一份: engines.setup_was_run() 要靠"地址是不是还是默认的"来判断
+# 用户有没有自己接了后端。
+DEFAULT_SD_SERVER = "http://127.0.0.1:9020"
+DEFAULT_AUDIO_SERVER = "http://127.0.0.1:9021"
+SD_SERVER = _env("SD_SERVER", DEFAULT_SD_SERVER)
+AUDIO_SERVER = _env("AUDIO_SERVER", DEFAULT_AUDIO_SERVER)
 
 MUSIC_MODEL_ID = _env("MUSIC_MODEL_ID", "stable-audio")
 DESIGN_MODEL_ID = _env("DESIGN_MODEL_ID", "qwen3-tts")        # VoiceDesign: 描述 -> 声音

@@ -498,13 +498,16 @@ async def continuity_status() -> str:
     不是坏了。
     """
     ok, down = await asyncio.to_thread(engines.health)
-    lines = [f"引擎: {'全部在线' if ok else '异常 —— ' + '; '.join(down)}",
+    lines = [f"引擎: {'全部在线' if ok else '连不上 —— ' + '、'.join(down)}",
              f"  sd-server      {SD_SERVER}    {'启用' if ENABLE_IMAGE else '未启用 (显存不足, 只装了音频那半)'}",
              f"  audiocpp-server {AUDIO_SERVER}  {'启用' if ENABLE_AUDIO else '未启用'}",
              f"资产目录: {STATE_DIR}",
              f"  角色 {len(store.actor_names())} 个, 定妆 {len(store.subject_names())} 个",
              f"抠图默认档: {DEFAULT_CUTOUT_QUALITY}",
              f"空闲卸载: {'关闭 (模型常驻)' if AUDIO_IDLE_UNLOAD_S <= 0 else f'{AUDIO_IDLE_UNLOAD_S:.0f}s 后释放显存'}"]
+    if not ok and not engines.setup_was_run():
+        lines.append("")
+        lines.append(engines.SETUP_HINT)
     return "\n".join(lines)
 
 
