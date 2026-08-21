@@ -148,6 +148,16 @@ ALPHA_MAX_BG_DETAIL = float(_env("ALPHA_MAX_BG_DETAIL", "0.5"))
 SFX_RATE = 44100
 MAX_SFX_SECONDS = float(_env("MAX_SFX_SECONDS", "5"))
 
+# 定妆图随工具结果一起回传, 让 agent 自己看一眼。
+#
+# 本插件不带 VLM, 也不打算带: 一个视觉模型要自己的显存, 会毁掉"峰值=单个最大模型"
+# 这条性质。而 harness 自己的模型多半已经能看图 —— 那就把图给它, 别再养一个。
+# 只有定妆/铸声这类"定完该先确认"的工具回传, subject_image 不回传 (它会被调很多次,
+# 每次塞一张图进上下文不划算)。
+# 缩到 INLINE_IMAGE_MAX px 再传: 定妆图默认 512, 确认长相够用了。
+INLINE_IMAGES = _env("CONTINUITY_INLINE_IMAGES", "1") not in ("0", "false", "False")
+INLINE_IMAGE_MAX = int(_env("CONTINUITY_INLINE_IMAGE_MAX", "512"))
+
 # 能力开关。显存不够时 continuity-setup 会关掉生图那半而保留音频那半 ——
 # 见 preflight.py: 换模型省不下显存 (Q4 与 Q8 实测同为 6.6 GB), 能省的只有"不装"。
 ENABLE_IMAGE = _env("CONTINUITY_ENABLE_IMAGE", "1") not in ("0", "false", "False")

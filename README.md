@@ -272,6 +272,28 @@ another tool — and everything downstream behaves identically. Audio is normali
 mono for you (44.1 kHz stereo in, verified: reference f0 identical, and an imported actor
 tracks a natively-cast one to 11 Hz).
 
+### Looking at what it made
+
+The pinning tools tell the agent to *look at the reference before committing to it*. So they
+return the image, not just its path — a 512 px JPEG (~35 KB) alongside the text, as MCP image
+content. **There is no VLM in this plugin and there will not be one:** a vision model wants its
+own VRAM, which would destroy the property that peak = the single largest model. The harness
+already has a model; give it the picture instead of running a second one.
+
+Whether the agent can actually see it depends on the harness's model. As of 2026-08-21,
+DeepSeek's API answers `INVALID_REQUEST: This model does not support image` for
+`deepseek-v4-flash`, so on that model it is inert — dsh degrades it to `[image unavailable]`
+and the run continues normally (observed, not assumed). Point the profile at any
+image-capable model and it starts working with no change here.
+Set `CONTINUITY_INLINE_IMAGES=0` to send text only.
+
+Note what this does *not* solve. Statistical verification (below) catches a grey PNG; a model
+looking at the picture catches "that is not the character I asked for". Neither catches
+geometry drift reliably — an earlier VLM-as-judge experiment here scored 9/9/10 on chest
+renders whose lids were visibly the wrong shape. Writing the geometry explicitly into
+`appearance` remains the fix; the picture is for the human-shaped judgement, not a replacement
+for it.
+
 **2. Degenerate output is refused.** A backend that miscomputes returns a perfectly
 well-formed all-zero WAV, or a flat grey PNG, with HTTP 200. Every artifact is checked
 (image standard deviation, audio RMS, non-finite samples) and the call fails loudly rather

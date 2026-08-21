@@ -17,13 +17,14 @@ import sys
 import threading
 import time
 
-from mcp.server.mcpserver import MCPServer
-from PIL import Image
+from mcp.server.mcpserver import Image, MCPServer
+from PIL import Image as PILImage
 
 from . import cutout, engines, jobs, sfx, store
 from .config import (GENERATED_DIR, ACTORS_DIR, SUBJECTS_DIR, STATE_DIR, ENABLE_IMAGE,
                      ENABLE_AUDIO, DEFAULT_CUTOUT_QUALITY, RETENTION_DAYS, CLEANUP_INTERVAL_S,
-                     MAX_SPEECH_CHARS, AUDIO_IDLE_UNLOAD_S, SD_SERVER, AUDIO_SERVER)
+                     MAX_SPEECH_CHARS, AUDIO_IDLE_UNLOAD_S, SD_SERVER, AUDIO_SERVER,
+                     INLINE_IMAGES, INLINE_IMAGE_MAX)
 
 logging.basicConfig(level=os.getenv("CONTINUITY_LOG_LEVEL", "INFO"), stream=sys.stderr)
 log = logging.getLogger("continuity")
@@ -33,6 +34,33 @@ mcp = MCPServer("continuity")
 
 def _err(prefix, e):
     return f"{prefix}: {e}"
+
+
+# 这四个工具的返回值不标 `-> str`: mcp 2.0 会按返回标注建一个结构化输出模型,
+# 标了 str 就只能回字符串, 回 [文字, 图片] 会被 pydantic 拒掉。
+def _with_image(text, path):
+    """把定妆图和说明一起回传 —— 说明"先看一眼"而不给图, 那句话是没法照做的。
+
+    缩过再传: 一张 512px PNG 已经足够确认长相, 而原图可能是 1024。
+    关掉: CONTINUITY_INLINE_IMAGES=0 (模型不认图片内容时)。
+    """
+    if not INLINE_IMAGES:
+        return text
+    try:
+        img = PILImage.open(path)
+        if max(img.size) > INLINE_IMAGE_MAX:
+            k = INLINE_IMAGE_MAX / max(img.size)
+            img = img.resize((max(1, int(img.width * k)), max(1, int(img.height * k))),
+                             PILImage.LANCZOS)
+        buf = io.BytesIO()
+        # JPEG 而不是 PNG: 这一份只是给模型看一眼, 存下来的那张 PNG 原样不动。
+        # 实测 512px 定妆图 PNG 约 200 KB, JPEG q85 约 40 KB —— 进上下文的东西便宜五倍,
+        # 而"这是不是我要的那个人"根本不需要无损。
+        img.convert("RGB").save(buf, format="JPEG", quality=85)
+        return [text, Image(data=buf.getvalue(), format="jpeg")]
+    except Exception:
+        log.warning("定妆图内联失败, 只回文字", exc_info=True)
+        return text
 
 
 async def _go(fn, *a, **kw):
@@ -209,12 +237,13 @@ if ENABLE_IMAGE:
             m = await _go(jobs.create_subject, name, appearance, kind, width, height, seed, force)
         except Exception as e:
             return _err("定妆失败", e)
-        return (f"{label} '{m['name']}' 已定妆。\n定妆图: {m['reference_path']}\n"
-                f"先看一眼确认是不是你要的, 不满意用 force=True 重定。")
+        return _with_image(
+            f"{label} '{m['name']}' 已定妆。\n定妆图: {m['reference_path']}\n"
+            f"先看一眼确认是不是你要的, 不满意用 force=True 重定。", m["reference_path"])
 
     @mcp.tool()
     async def create_character(name: str, appearance: str, width: int = 512, height: int = 512,
-                               seed: int = None, force: bool = False) -> str:
+                               seed: int = None, force: bool = False):
         """给一个人物定妆(生成并存下参考图), 之后 subject_image 出的每张图长相都一致。
 
         为什么要有这一步: generate_image 每次给的是"长得不一样的人"。同一个角色的头像 /
@@ -242,7 +271,7 @@ if ENABLE_IMAGE:
 
     @mcp.tool()
     async def create_animal(name: str, appearance: str, width: int = 512, height: int = 512,
-                            seed: int = None, force: bool = False) -> str:
+                            seed: int = None, force: bool = False):
         """给一只动物/坐骑/灵兽定妆, 之后每张图它都是同一只。
 
         appearance 里必须写死这几样:
@@ -259,7 +288,7 @@ if ENABLE_IMAGE:
 
     @mcp.tool()
     async def create_object(name: str, appearance: str, width: int = 512, height: int = 512,
-                            seed: int = None, force: bool = False) -> str:
+                            seed: int = None, force: bool = False):
         """给一件道具/物件定妆, 之后每张图它都长一个样, 换角度也不变。
 
         物件最容易漂的是**几何**, 不是材质配色 —— 实测一个宝箱, 材质配色五金件都对得上,
@@ -278,7 +307,7 @@ if ENABLE_IMAGE:
 
     @mcp.tool()
     async def import_subject(name: str, image_path: str, appearance: str,
-                             kind: str = "character", force: bool = False) -> str:
+                             kind: str = "character", force: bool = False):
         """用一张现成的图定妆 —— 角色/物件是别处画的也照样能保持一致。
 
         和 create_character / create_object 得到的东西完全一样, 只是定妆图由你提供。
@@ -303,9 +332,10 @@ if ENABLE_IMAGE:
             return _err("导入失败", e)
         size = (f"原图 {m['source_size']} → 存为 {m['stored_size']}"
                 if m["resized"] else f"{m['source_size']}")
-        return (f"{m['kind']} '{m['name']}' 已用现成图定妆 ({size})。\n"
-                f"定妆图: {m['reference_path']}\n"
-                f"先用 subject_image 出一张试试, 确认外观跟得住。")
+        return _with_image(
+            f"{m['kind']} '{m['name']}' 已用现成图定妆 ({size})。\n"
+            f"定妆图: {m['reference_path']}\n"
+            f"先用 subject_image 出一张试试, 确认外观跟得住。", m["reference_path"])
 
     @mcp.tool()
     async def subject_image(subject: str, scene: str, width: int = 512, height: int = 512,
@@ -388,9 +418,9 @@ if ENABLE_IMAGE:
 
 def _open_image(path=None, b64=None):
     if path:
-        return Image.open(path)
+        return PILImage.open(path)
     if b64:
-        return Image.open(io.BytesIO(base64.b64decode(b64)))
+        return PILImage.open(io.BytesIO(base64.b64decode(b64)))
     raise ValueError("必须提供 image_path 或 image_base64")
 
 
