@@ -17,7 +17,7 @@ from PIL import Image
 from . import engines, store
 from .config import (GENERATED_DIR, MAX_IMAGE_SIZE, SUBJECT_FRAMING, DEFAULT_SUBJECT_KIND,
                      MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, DEFAULT_VOICE,
-                     MAX_SPEECH_CHARS, MAX_AUDIO_SECONDS, NAME_RE, STRICT_VRAM,
+                     MAX_SPEECH_CHARS, MAX_AUDIO_SECONDS, NAME_RE,
                      REF_MIN_S, REF_MAX_S, MAX_SAMPLE_CHARS)
 from .verify import check_image, check_audio
 
@@ -75,16 +75,16 @@ def _clamp_size(w, h):
     return want_w, want_h, max(256, want_w), max(256, want_h)
 
 
-def _run(fn, *a, needs_free_vram=False, **kw):
-    """串行执行一件用 GPU 的活, 并维护空闲卸载的计时。
+def _run(fn, *a, needs=None, **kw):
+    """串行执行一件用 GPU 的活。
 
-    needs_free_vram: 生图专用 —— 音频模型不会自己让路, 而两者叠加会超出 8 GiB 卡。
+    needs 是这件活要用的模型 id; None 表示它不用音频模型 (生图)。开工前把不是它的
+    都卸掉 —— 这样峰值恒等于单个最大模型, 与调用顺序无关。
     """
     with _gpu_lock:
         engines.mark_busy()
         try:
-            if needs_free_vram and STRICT_VRAM:
-                engines.unload_all_audio("为生图腾显存")
+            engines.release_all_but(needs, "为生图腾显存" if needs is None else "")
             return fn(*a, **kw)
         finally:
             engines.mark_idle()
@@ -102,7 +102,7 @@ def generate_image(prompt, width=1024, height=1024, seed=None, ref_b64=None,
         _fit_size(_out(name), want_w, want_h)
         check_image(_out(name))
         return name
-    name = _run(work, needs_free_vram=True)
+    name = _run(work, needs=None)
     clamped = {"width": want_w, "height": want_h} if (want_w, want_h) != (width, height) else None
     return {"file": name, "path": str(_out(name)), "clamped": clamped}
 
@@ -144,7 +144,7 @@ def create_subject(name, appearance, kind=DEFAULT_SUBJECT_KIND, width=512, heigh
                                            "reference_path": str(png), "seed": seed})
         log.info("[subject] 定妆 %s (%s) 完成 (%.1fs)", name, kind, time.time() - t)
         return meta
-    return _run(work, needs_free_vram=True)
+    return _run(work, needs=None)
 
 
 # ---- 音频 ----
@@ -159,7 +159,6 @@ def generate_music(prompt, seed=None, duration=30.0, num_inference_steps=None):
 
     def work():
         t = time.time()
-        engines.use_audio_model(MUSIC_MODEL_ID)
         res = engines.post(f"{engines.AUDIO_SERVER}/v1/tasks/run",
                            {"model": MUSIC_MODEL_ID, "request": req}, "audiocpp-server")
         b64 = res.get("audio")
@@ -170,7 +169,7 @@ def generate_music(prompt, seed=None, duration=30.0, num_inference_steps=None):
         check_audio(_out(name))
         log.info("[music] ok in %.1fs", time.time() - t)
         return name
-    name = _run(work)
+    name = _run(work, needs=MUSIC_MODEL_ID)
     return {"file": name, "path": str(_out(name)), "duration": secs,
             "clamped": {"duration": secs} if secs != duration else None}
 
@@ -214,7 +213,7 @@ def create_actor(name, voice, sample_text=None, seed=None, force=False):
             "ref_seconds": round(secs, 1), "seed": seed})
         log.info("[actor] 铸声 %s 完成 (%.1fs, rtf=%s)", name, time.time() - t, tm.get("rtf"))
         return meta
-    meta = _run(work)
+    meta = _run(work, needs=DESIGN_MODEL_ID)
     meta["clipped"] = clipped
     # 字数卡不准时长 (实测 60 字 -> 19.1 秒), 所以铸完按真实时长再复核一次。
     # 不重铸也不失败 —— 这段参考音本身是好的, 只是之后每句台词都会比必要的贵。
@@ -258,7 +257,7 @@ def speak(text, actor=None, voice=None, seed=None, speaking_rate=None):
         check_audio(_out(name))
         log.info("[%s] speech ok in %.1fs (rtf=%s)", model_id, time.time() - t, tm.get("rtf"))
         return name
-    name = _run(work)
+    name = _run(work, needs=model_id)
     return {"file": name, "path": str(_out(name)), "clipped": clipped}
 
 

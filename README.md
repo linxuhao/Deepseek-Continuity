@@ -32,8 +32,8 @@ hardware and changes nothing:
   内存    30.9 GiB
   磁盘    3118.4 GiB 可用 / 需要 30 GiB
   生图    启用
+  音频    启用
   抠图默认档  best
-  参考音上限  30s (每秒约 0.19 GiB 显存)
 ```
 
 Two details in there that exist because the naive version is wrong:
@@ -109,29 +109,63 @@ backdrop with the edges zoomed. `best` remains the default where there is room, 
 models do differ in principle on fine edges (hair, semi-transparent fringes), but treat `fast`
 as a legitimate choice rather than a degraded fallback.
 
-## What adapts to your VRAM, and what cannot
+## One rule, not a tier list
 
-Three things scale with the card. All three thresholds are measured, not guessed:
+Jobs are serialized, so **at any moment exactly one model is needed**. Everything else is
+released before the job starts. That is the whole VRAM policy.
 
-| | Small card | Large card | Why |
-|---|---|---|---|
-| **Which half installs** | audio only (<8 GiB) | image + audio | Image generation peaks at 6.80 GiB and there is no way to shrink it — see below |
-| **Audio unloaded before image** | yes (<12 GiB) | no | Audio models stay resident; image on top of them peaks at 7.84 GiB instead of 6.80 |
-| **Reference-audio limit** | 15 s (<12 GiB) | 30 s | Reference audio costs ~0.19 GiB per second |
+It buys a property worth more than a few saved seconds: **peak VRAM is a constant 6.80 GiB
+regardless of what you call, in what order.** Measured over an alternating
+speech→image→speech→image sequence:
 
-The audio-only tier is a real product, not a consolation prize: casting voices, dialogue,
-music, SFX and cutout all work, and it fits comfortably in 4 GiB.
+| | peak | speech | image | 6 calls |
+|---|---|---|---|---|
+| keep models resident | **10.94 GiB** | 2.8 s avg | 11.5 s | 42.9 s |
+| release what isn't needed | **6.79 GiB** | 4.8 s | 11.6 s | 49.2 s |
 
-**What does not adapt: the image model.** Quantizing it does not move VRAM at all —
+Keeping them resident is 16% faster and **does not fit an 8 GiB card** — and "voice a line,
+then draw something" is the most ordinary sequence there is. An earlier version of this README
+quoted 7.84 GiB for that overlap; that came from a lighter sequence I happened to test, and
+using it as the ceiling was wrong. A cloned voice keeps its reference audio resident too, which
+is where the rest comes from.
+
+**What the reload actually costs:** 4.8 s instead of 1.2 s, and only on the first call after
+switching away. Ten dialogue lines in a row pay it once:
+
+```
+第 1 句 4.63s   之后九句平均 1.19s   十句合计 15.4s
+```
+
+So there is no VRAM tier list, and no 12 GiB threshold. Above 8 GiB every card behaves
+identically. Below 8 GiB the installer explains why image generation will not fit and asks
+whether to install the audio half alone — it does not quietly substitute a different product:
+
+```
+  生图    显存不足
+          Fake GTX 1060 只有 6.0 GiB, 而生图实测峰值 6.80 GiB, 需要 8 GiB。
+          换更小的生图模型省不下这部分 (Q4 与 Q8 峰值相同 6.60 / 6.59), 降分辨率也不行
+          —— 瓶颈是那个 8 GiB 不量化的文本编码器。
+          音频那半仍然可以装: 铸声/配音/音乐/音效/抠图都能用, 4 GiB 就够。
+
+  ⚠️ 这张卡装不了生图那半。
+     只装音频那半 (铸声/配音/音乐/音效/抠图)? [y/N]
+```
+
+The audio-only install is a real product, not a consolation prize: casting voices, dialogue,
+music, SFX and cutout all work in 4 GiB.
+
+**What does not adapt at all: the image model.** Quantizing it does not move VRAM —
 Q4_0 (2.29 GiB of weights) peaks at 6.60 GiB, Q8_0 (4.01 GiB) at 6.59 GiB, identical. Lowering
 resolution does not help either (512 / 768 / 1024 all peak the same; only time changes). The
-bottleneck is the **8 GiB unquantized 4B text encoder**, not the diffusion model. So there is
-no "medium" image tier to offer, only installed or not. (Q4_0 ships anyway — same VRAM,
-1.7 GiB less disk.)
+bottleneck is the **8 GiB unquantized 4B text encoder**. So there is no "medium" image tier to
+offer, only installed or not. (Q4_0 ships anyway — same VRAM, 1.7 GiB less disk.)
 
 Going below 8 GiB for images means changing the text encoder or the model family. That is
 possible, but it moves identity pinning from native `ref_images` to IP-Adapter, which is
 **not verified here** — and identity pinning is the whole point.
+
+The one thing that does still key off a resource is host RAM, and it is a different resource:
+below 12 GiB RAM the cutout default drops to `quality="fast"` (see above).
 
 ## Zero residency
 
@@ -151,8 +185,10 @@ because someone voicing ten lines in a row should not pay a reload each time. Re
 nothing measurable: the same TTS request took 3.0 s both cold and warm, because weights are
 mmap'd and sit in page cache.
 
-Requests are serialized, so peak = the single largest model. Closing the agent releases the
-VRAM too — the MCP server unloads on exit rather than leaving the engines holding it.
+Requests are serialized and everything unneeded is released first, so peak = the single largest
+model, always. The idle timer covers the one case the rule cannot: after the *last* job there is
+no next job to trigger a release, so the timer does it. Closing the agent releases the VRAM too —
+the MCP server unloads on exit rather than leaving the engines holding it.
 
 ## Two things it actually does
 
@@ -226,7 +262,7 @@ Every number here is a measured failure boundary, not a policy.
 | limit | value | what happens past it |
 |---|---|---|
 | line length | 200 chars | 600 chars wedged the GPU: `amdgpu GPU reset(6)`, device lost, an unrelated process on the *other* card killed. 200 is half the largest known-safe value. |
-| reference audio | 15 s / 30 s | ~0.19 GiB VRAM per second: 15 s → 6.59 GiB, 30 s → 9.04 GiB. Past that, voice becomes the ceiling instead of image. |
+| reference audio | 15 s | ~0.19 GiB VRAM per second: 15 s → 6.59 GiB, 30 s → 9.04 GiB. 15 s is the last value that stays under the image peak, so voice never becomes the ceiling. One value for every card — 3–10 s is already enough to pin a timbre, so a bigger cap on bigger cards would only mean "this clip imports on my machine and not on yours". |
 | casting script | 45 chars | It produces the reference audio, which is then re-read on every later line. Char count is a bad proxy (60 chars measured 19.1 s, not the 13.7 s the ratio predicts), so the real duration is checked after casting and reported. |
 | image size | 1024 px | 1280 pushed VRAM to 14.5/16.4 GiB; 2048 sent the driver into `restore_userptr_worker` thrashing with the process stuck in uninterruptible `D` state — worse than a clean OOM. |
 | music length | 120 s | Not a safety limit: the engine silently truncates at 120 s and reports success. The limit turns that into an explicit `clamped` field. |

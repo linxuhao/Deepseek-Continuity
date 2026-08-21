@@ -5,10 +5,17 @@
 #   内存  软门槛。决定抠图默认走哪个模型 —— 这是唯一真正"自适应"的一项。
 #   磁盘  硬门槛。权重是十几 GB, 下到一半没空间比一开始就拒绝糟糕得多。
 #
-# 关于"显存自适应": 换更小的生图模型省不下显存, 这是量出来的 ——
-# Q4_0 (2.29 GB 权重) 峰值 6.60 GB, Q8_0 (4.01 GB) 峰值 6.59 GB, 一模一样;
-# 降分辨率也一样 (512/768/1024 峰值相同, 只有耗时变)。瓶颈是那个 8 GB 不量化的
-# 4B 文本编码器, 不是扩散模型。所以这里没有"中配档", 只有装与不装。
+# 显存只有一个门槛, 没有分档。8 GiB 以上一律同一套行为 —— 因为运行时的规则是
+# "开工前把不是这件活要用的模型全卸掉", 峰值因此恒等于单个最大模型 (6.80 GiB),
+# 与卡多大、与调用顺序都无关。大卡上留着模型不卸能省几秒, 但那要多一个配置项、
+# 多一条只在大卡上走的代码路径, 而且会让"峰值多少"重新变成一个要看历史的问题。
+#
+# 8 GiB 以下不自动降级成"只装音频"那种另一个产品, 而是说清楚再问一句 ——
+# 用户知道一些我不知道的事 (要不要升级显卡, 是不是只想要配音)。
+#
+# 换更小的生图模型省不下显存, 这是量出来的: Q4_0 (2.29 GiB 权重) 峰值 6.60 GiB,
+# Q8_0 (4.01 GiB) 峰值 6.59 GiB, 一模一样; 降分辨率也一样 (512/768/1024 峰值相同,
+# 只有耗时变)。瓶颈是那个 8 GiB 不量化的 4B 文本编码器, 不是扩散模型。
 # ==========================================
 import os
 import re
@@ -19,8 +26,9 @@ from pathlib import Path
 GIB = 1024 ** 3
 
 # 各项的门槛 (GiB)
-VRAM_FOR_IMAGE = 8.0          # 生图实测峰值 6.80 GB
-VRAM_FOR_AUDIO = 4.0          # 单个音频模型实测峰值 3.62 GB
+IMAGE_PEAK_GIB = 6.80         # 生图实测峰值 (与分辨率和量化都无关)
+VRAM_FOR_IMAGE = 8.0
+VRAM_FOR_AUDIO = 4.0          # 单个音频模型实测峰值 3.62 GiB
 RAM_FOR_BEST_CUTOUT = 12.0    # remove_bg quality=best 实测峰值 7.74 GB
 # 磁盘按"装的过程中"算, 不是按"装完之后" —— 峰值出现在编译还没被回收的时候, 实测:
 #   权重  生图 10.10 + 音频 7.33 GiB
@@ -250,22 +258,21 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
                                if d["type"] != "CPU" and d["index"] != dev["index"]]
 
     vram = dev["vram_gib"]
-    enable_image = want_image and vram >= VRAM_FOR_IMAGE
     enable_audio = want_audio and vram >= VRAM_FOR_AUDIO
-    if not enable_audio and not enable_image:
+    if not enable_audio:
         raise PreflightError(
             f"{dev['name']} 只有 {vram:.1f} GiB 显存, 低于最低要求 {VRAM_FOR_AUDIO:.0f} GiB。\n"
-            f"换更小的模型省不下这部分显存 —— 实测 Q4 与 Q8 的峰值相同 (6.60 / 6.59 GB), "
+            f"换更小的模型省不下这部分显存 —— 实测 Q4 与 Q8 的峰值相同 (6.60 / 6.59 GiB), "
             f"降分辨率也一样, 瓶颈是文本编码器。")
+    enable_image = want_image and vram >= VRAM_FOR_IMAGE
     if want_image and not enable_image:
-        report["image_off_reason"] = (
-            f"{dev['name']} 只有 {vram:.1f} GiB 显存, 生图实测峰值 6.80 GB, 需要 "
-            f"{VRAM_FOR_IMAGE:.0f} GiB。只装音频那半 (铸声/配音/音乐/音效/抠图)。")
-    # 12 GiB 以上才关掉"生图前先腾显存": 生图 6.80 + 音频 1.27 = 8.07, 留够余量
-    report["strict_vram"] = vram < 12.0
-    # 参考音时长上限也是显存的函数 (约 0.19 GiB/秒 + ~3 GiB 基线):
-    # 15s -> 6.59 GiB 压在生图峰值之下; 30s -> 9.04 GiB, 只有大卡放得下。
-    report["ref_max_s"] = 15 if vram < 12.0 else 30
+        # 不自作主张换成另一个产品 —— setup 会把这段摆出来问一句
+        report["image_warning"] = (
+            f"{dev['name']} 只有 {vram:.1f} GiB, 而生图实测峰值 {IMAGE_PEAK_GIB:.2f} GiB, "
+            f"需要 {VRAM_FOR_IMAGE:.0f} GiB。\n"
+            f"          换更小的生图模型省不下这部分 (Q4 与 Q8 峰值相同 6.60 / 6.59), "
+            f"降分辨率也不行 —— 瓶颈是那个 8 GiB 不量化的文本编码器。\n"
+            f"          音频那半仍然可以装: 铸声/配音/音乐/音效/抠图都能用, 4 GiB 就够。")
     report["enable_image"] = enable_image
     report["enable_audio"] = enable_audio
 
@@ -303,16 +310,13 @@ def format_report(r):
         out.append(f"          跳过 {s['name']} —— 软件渲染, 不是真显卡")
     out.append(f"  内存    {r['ram_gib']:.1f} GiB")
     out.append(f"  磁盘    {r['disk_free_gib']:.1f} GiB 可用 / 需要 {r['disk_need_gib']:.0f} GiB")
-    out.append(f"  生图    {'启用' if r['enable_image'] else '未启用'}")
-    if r.get("image_off_reason"):
-        out.append(f"          {r['image_off_reason']}")
+    out.append(f"  生图    {'启用' if r['enable_image'] else '显存不足'}")
+    if r.get("image_warning"):
+        out.append(f"          {r['image_warning']}")
     out.append(f"  音频    {'启用' if r['enable_audio'] else '未启用'}")
     out.append(f"  抠图默认档  {r['cutout_quality']}")
-    if r.get("runtime_mode") == "nvidia":
-        out.append("  接入方式  nvidia-container-toolkit (⚠️ 这条路径没有在 N 卡上实测过)")
-    out.append(f"  参考音上限  {r['ref_max_s']:.0f}s (每秒约 0.19 GiB 显存)")
-    if r.get("strict_vram"):
-        out.append("  生图前先卸音频模型 (显存不宽裕, 两者叠加会超出这张卡)")
     if r.get("cutout_reason"):
         out.append(f"          {r['cutout_reason']}")
+    if r.get("runtime_mode") == "nvidia":
+        out.append("  接入方式  nvidia-container-toolkit (⚠️ 这条路径没有在 N 卡上实测过)")
     return "\n".join(out)

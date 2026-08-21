@@ -191,6 +191,13 @@ def cmd_install(args):
     except preflight.PreflightError as e:
         die(str(e))
     say(preflight.format_report(report))
+    if report.get("image_warning") and not args.yes and not args.no_image:
+        # 不替用户决定: 他知道一些我不知道的事 (要不要换显卡, 是不是只要配音)
+        say("")
+        say("  ⚠️ 这张卡装不了生图那半。")
+        if input("     只装音频那半 (铸声/配音/音乐/音效/抠图)? [y/N] ").strip().lower() \
+                not in ("y", "yes"):
+            die("已取消。换一张 8 GiB 以上的卡, 或者加 --no-image 明确只装音频。", 0)
     if not args.yes:
         groups = ["audio"] + (["image"] if report["enable_image"] else [])
         manifest = json.loads((DEPLOY / "models.json").read_text(encoding="utf-8"))
@@ -227,7 +234,6 @@ def _print_done(state_dir, report, env, profiles, mode="dri"):
     say(f"  显卡      {report['device']['name']} ({report['device']['vram_gib']:.1f} GiB)")
     say(f"  能力      {'生图 + 音频' if 'image' in profiles else '仅音频 (显存不足以装生图)'}")
     say(f"  抠图默认  {report['cutout_quality']}")
-    say(f"  参考音上限 {report['ref_max_s']:.0f}s")
     say(f"  资产目录  {state_dir}   ← 参考音和定妆图在这里, 不可复现, 记得备份")
     say("")
     say("把它接到 DeepSeek Harness:")
@@ -242,9 +248,7 @@ def _print_done(state_dir, report, env, profiles, mode="dri"):
     if "image" not in profiles:
         say("  CONTINUITY_ENABLE_IMAGE=0 \\")
     say(f"  CONTINUITY_CUTOUT_QUALITY={report['cutout_quality']} \\")
-    if not report.get("strict_vram"):
-        say("  CONTINUITY_STRICT_VRAM=0 \\")
-    say(f"  CONTINUITY_REF_MAX_S={report['ref_max_s']:.0f} \\")
+
     say("  uvx continuity-mcp")
     say("")
     say("引擎的开关:")

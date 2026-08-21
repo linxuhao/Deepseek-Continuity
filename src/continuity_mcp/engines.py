@@ -1,12 +1,24 @@
 # ==========================================
 # 两个 ggml/Vulkan 引擎的客户端 + 显存生命周期。
 #
-# 显存策略是这个插件"不用的时候跟没装过一样"的全部实现:
-#   生图  sd-server 开 --offload-to-cpu, 权重根本不常驻显存, 出图完 2s 内回到 0.21 GB
-#   音频  引擎会把用过的模型留在显存里, 所以两条规则:
-#         1. 同一时刻只留一个 (三个全常驻实测峰值 15.70/16.00 GB, 再叠一张生图就 device lost)
-#         2. 空闲 AUDIO_IDLE_UNLOAD_S 之后全卸掉
-# 重载实测 4.3 s 且权重在 page cache 里, 这个代价只在切换模型时付。
+# 显存只有一条规则: 任务是串行的, 同一时刻只需要一个模型, 所以每次开工前把不是它的
+# 都还回去 —— release_all_but(需要的那个)。
+#
+# 这条规则换来的是一个常数: 峰值 = 单个最大模型 = 6.80 GiB, 与调用顺序无关。
+# 之前是三套拼起来的规则 (音频之间互卸 / 空闲卸 / 大卡不卸生图前那次), 于是峰值
+# 取决于你之前干了什么 —— 实测 "配一句台词再画张图" 这种最普通的顺序会到 10.94 GiB,
+# 8 GiB 的卡根本跑不了。而 8 GiB 正是本插件承诺的门槛。
+#
+# 代价实测: 交替调用时, 紧跟在生图后面的那次配音要重载, +3.4 s (5.0 vs 1.6)。
+# 连着配十句不受影响 —— 中间没有别的模型来抢, 就不会被卸。
+# 权重是 mmap 的且在 page cache 里, 所以重载只是重新建 session, 不是重读磁盘。
+#
+# 生图那半不需要这套: sd-server 开着 --offload-to-cpu, 权重根本不常驻显存,
+# 出图完 2 s 内自己回到 0.21 GiB。
+#
+# 空闲计时器仍然保留, 但它管的是另一件事: 最后一个任务之后没有"下一个任务"来触发
+# 卸载, 所以由它来收尾。给 120 s 宽限而不是立刻卸, 是因为连着配十句台词的人
+# 不该每句都付重载。
 # ==========================================
 import base64
 import json
@@ -107,34 +119,30 @@ def mark_idle():
     _busy.clear()
 
 
-def unload_all_audio(reason="explicit"):
+def release_all_but(keep=None, reason=""):
+    """把除 keep 之外的模型全还回显存池。keep=None 表示全卸 (生图前就是这种)。
+
+    卸载失败不让任务失败: 那只是少省一点显存, 不是错误 —— 除非显存真的不够,
+    而那种情况下引擎自己会报 OOM, 报得比我们清楚。"""
+    if keep:
+        _audio_state.update(last_use=time.time(), loaded=True)
+    others = sorted(AUDIO_MODELS - ({keep} if keep else set()))
+    if not others:
+        return True
     try:
-        post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": sorted(AUDIO_MODELS)},
-             "audiocpp-server", timeout=120, retry_s=0)
-        _audio_state["loaded"] = False
-        log.info("音频模型已全部卸载 (%s), 显卡回到零常驻", reason)
+        post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others},
+             "audiocpp-server", timeout=120, retry_s=0 if keep is None else ENGINE_WAIT_S)
+        if keep is None:
+            _audio_state["loaded"] = False
+            log.info("音频模型已全部卸载%s, 显卡回到零常驻", f" ({reason})" if reason else "")
         return True
     except Exception:
-        log.warning("卸载失败, 下次再试", exc_info=True)
+        log.warning("卸载 %s 失败, 继续", others, exc_info=True)
         return False
 
 
-def use_audio_model(keep):
-    """同一时刻只让一个音频模型占着显存。
-
-    三个音频模型 (音乐 / VoiceDesign / Base 克隆) 全常驻时实测峰值 15.70/16.00 GB,
-    再叠一张 1024 生图就把 GPU 挤挂了。而它们的显存是"用过就留着"的: 三个都推理过
-    是 11.09 GB, 卸掉两个降到 7.90, 全卸掉降到 3.62。
-    卸载失败不让任务失败: 那只是少省一点显存, 不是错误。"""
-    _audio_state.update(last_use=time.time(), loaded=True)
-    others = sorted(AUDIO_MODELS - {keep})
-    if not others:
-        return
-    try:
-        post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others},
-             "audiocpp-server", timeout=120)
-    except Exception:
-        log.warning("卸载 %s 失败, 继续", others, exc_info=True)
+def unload_all_audio(reason="explicit"):
+    return release_all_but(None, reason)
 
 
 def _idle_loop():
@@ -166,7 +174,7 @@ def shutdown():
 # ---- 语音 ----
 
 def tts(model_id, req, tag="audiocpp-server"):
-    use_audio_model(model_id)
+    release_all_but(model_id)
     req["max_tokens"] = max(64, min(SPEECH_MAX_TOKENS,
                                     int(len(req["text"]) * SPEECH_TOKENS_PER_CHAR)))
     res = post(f"{AUDIO_SERVER}/v1/tasks/run", {"model": model_id, "request": req}, tag)

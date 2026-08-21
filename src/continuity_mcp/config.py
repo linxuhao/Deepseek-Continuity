@@ -75,8 +75,9 @@ SPEECH_MAX_TOKENS = int(_env("SPEECH_MAX_TOKENS", "900"))
 #     5s 3.92    8s 4.58    12s 5.50    15s 6.59    18s 7.31    20s 7.58    30s 9.04
 # 取 15s 是因为它是最后一个还压在生图峰值 (6.80 GiB) 之下的档 —— 再长, 配音就取代
 # 生图成了整套东西的显存天花板, 8 GiB 的卡就装不下了。
-# 而参考音并不是越长越好: 3~10 秒就足够定住音色, 20 秒之后基本没有额外收益。
-# 显存宽裕的机器由 continuity-setup 写 CONTINUITY_REF_MAX_S=30 放宽。
+# 大卡不单独放宽: 30s 的参考音对音色没有额外收益 (3~10 秒就足够定住), 为此多一个
+# 按显存分档的配置项, 换来的是"同一段录音在你机器上能导入、在别人机器上不能"。
+# 想要就自己设 CONTINUITY_REF_MAX_S。
 REF_MIN_S = float(_env("CONTINUITY_REF_MIN_S", "2"))
 REF_MAX_S = float(_env("CONTINUITY_REF_MAX_S", "15"))
 # 铸声台词的字数上限, 单独于 MAX_SPEECH_CHARS —— 后者管的是"说一句台词"(200 字/45 秒),
@@ -148,15 +149,6 @@ ALPHA_MAX_BG_DETAIL = float(_env("ALPHA_MAX_BG_DETAIL", "0.5"))
 
 SFX_RATE = 44100
 MAX_SFX_SECONDS = float(_env("MAX_SFX_SECONDS", "5"))
-
-# 生图之前先把音频模型卸掉。
-#
-# 音频引擎的显存是"用过就留着"的, 而生图不会去动它 —— 实测一段配音之后紧接着出一张
-# 1024 图, 峰值 7.84 GiB = 生图 6.80 + 音频残留 1.27。16 GiB 的卡上看不出来,
-# 8 GiB 的卡上这就是 OOM。
-# 默认开: 猜错的代价不对称 —— 关错了是崩, 开错了只是下次配音多花 4.3 s 重载。
-# 显存宽裕的机器由 continuity-setup 写 CONTINUITY_STRICT_VRAM=0 关掉它。
-STRICT_VRAM = _env("CONTINUITY_STRICT_VRAM", "1") not in ("0", "false", "False")
 
 # 能力开关。显存不够时 continuity-setup 会关掉生图那半而保留音频那半 ——
 # 见 preflight.py: 换模型省不下显存 (Q4 与 Q8 实测同为 6.6 GB), 能省的只有"不装"。
