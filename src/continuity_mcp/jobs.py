@@ -16,20 +16,17 @@ import numpy as np
 from PIL import Image
 
 from . import engines, store
+from .errors import Conflict, NotFound, UserError    # noqa: F401  (jobs.UserError 是既有的公开名字)
 from .config import (GENERATED_DIR, MAX_IMAGE_SIZE, SUBJECT_FRAMING, DEFAULT_SUBJECT_KIND,
                      MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, DEFAULT_VOICE,
                      MAX_SPEECH_CHARS, MAX_AUDIO_SECONDS, NAME_RE,
                      REF_MIN_S, REF_MAX_S, MAX_SAMPLE_CHARS)
-from .verify import check_image, check_audio
+from .verify import check_image, check_audio, DegenerateOutput
 
 log = logging.getLogger("continuity")
 
 # 全局串行锁。跨线程 (MCP 的 to_thread) 生效。
 _gpu_lock = threading.Lock()
-
-
-class UserError(ValueError):
-    """给调用方 (LLM) 看的指令式报错 —— 告诉它下一步该干什么, 不只是"失败了"。"""
 
 
 def _new_name(prefix, ext):
@@ -128,20 +125,22 @@ def generate_image(prompt, width=1024, height=1024, seed=None, ref_b64=None,
             "clamped": clamped}
 
 
-def subject_image(subject, scene, width=512, height=512, seed=None):
+def subject_image(subject, scene, width=512, height=512, seed=None,
+                  steps=None, cfg_scale=None):
     """场景图: 外观由定妆图决定, scene 只管场景/动作/视角。"""
     s = store.load_subject(subject)
     if s is None:
-        raise UserError(
+        raise NotFound(
             f"subject '{subject}' 不存在 —— 先调 create_character / create_animal / "
             f"create_object (name='{subject}', appearance='一段外观描述') 定妆, "
             f"再用它出场景图。现有: {store.subject_names() or '(还没有)'}")
     png, _ = store.subject_paths(subject)
-    return generate_image(f'{s["appearance"]}, {scene}', width, height, seed, _ref_b64(png))
+    return generate_image(f'{s["appearance"]}, {scene}', width, height, seed, _ref_b64(png),
+                          steps, cfg_scale)
 
 
 def create_subject(name, appearance, kind=DEFAULT_SUBJECT_KIND, width=512, height=512,
-                   seed=None, force=False):
+                   seed=None, force=False, steps=None, cfg_scale=None):
     """定妆: 生成一张参考图存成 subject。和铸声一样占 GPU, 所以走同一把锁。"""
     name = (name or "").strip()
     if not NAME_RE.match(name):
@@ -151,14 +150,15 @@ def create_subject(name, appearance, kind=DEFAULT_SUBJECT_KIND, width=512, heigh
     if not (appearance or "").strip():
         raise UserError("appearance 是外观描述, 不能为空")
     if store.load_subject(name) is not None and not force:
-        raise UserError(f"subject '{name}' 已存在。定妆一次用一辈子, 覆盖会让它之前所有"
-                        f"场景图的外观对不上 —— 确实要重定就传 force=True。")
+        raise Conflict(f"subject '{name}' 已存在。定妆一次用一辈子, 覆盖会让它之前所有"
+                       f"场景图的外观对不上 —— 确实要重定就传 force=true。")
     _, _, w, h = _clamp_size(width, height)
     png, meta_path = store.subject_paths(name)
 
     def work():
         t = time.time()
-        data, _ = engines.sd_generate(f"{appearance}, {SUBJECT_FRAMING[kind]}", w, h, seed=seed)
+        data, _ = engines.sd_generate(f"{appearance}, {SUBJECT_FRAMING[kind]}", w, h,
+                                      steps=steps, cfg_scale=cfg_scale, seed=seed)
         tmp = png.with_suffix(".png.new")
         tmp.write_bytes(data)
         # 退化的定妆图会污染这个 subject 的每一张场景图, 所以校验不过就不许落到最终路径
@@ -183,10 +183,10 @@ def generate_music(prompt, seed=None, duration=30.0, num_inference_steps=None):
     def work():
         t = time.time()
         res = engines.post(f"{engines.AUDIO_SERVER}/v1/tasks/run",
-                           {"model": MUSIC_MODEL_ID, "request": req}, "audiocpp-server")
+                           {"model": MUSIC_MODEL_ID, "request": req}, "audiocpp_server")
         b64 = res.get("audio")
         if not b64:
-            raise RuntimeError(f"audiocpp-server returned no audio: {str(res)[:300]}")
+            raise RuntimeError(f"audiocpp_server returned no audio: {str(res)[:300]}")
         name = _new_name("music", "wav")
         _out(name).write_bytes(base64.b64decode(b64))
         # 报实测时长而不是请求时长。引擎在 120s 处静默截断 (见 config.MAX_AUDIO_SECONDS),
@@ -218,8 +218,8 @@ def create_actor(name, voice, sample_text=None, seed=None, force=False):
     if not (voice or "").strip():
         raise UserError("create_actor 必须给 voice (声音的自然语言描述)")
     if store.load_actor(name) is not None and not force:
-        raise UserError(f"actor '{name}' 已存在。铸声一次用一辈子, 覆盖会让它之前所有台词的"
-                        f"音色对不上 —— 确实要重铸就传 force=True。")
+        raise Conflict(f"actor '{name}' 已存在。铸声一次用一辈子, 覆盖会让它之前所有台词的"
+                       f"音色对不上 —— 确实要重铸就传 force=true。")
     raw = (sample_text or DEFAULT_SAMPLE_TEXT).strip()
     text, clipped = raw[:MAX_SAMPLE_CHARS], len(raw) > MAX_SAMPLE_CHARS
     wav, meta_path = store.actor_paths(name)
@@ -256,7 +256,7 @@ def speak(text, actor=None, voice=None, seed=None, speaking_rate=None):
         a = store.load_actor(actor)
         if a is None:
             # 指令式报错: 调用方是 LLM, 告诉它下一步该干什么
-            raise UserError(f"actor '{actor}' 不存在 —— 先调 create_actor(name='{actor}', "
+            raise NotFound(f"actor '{actor}' 不存在 —— 先调 create_actor(name='{actor}', "
                             f"voice='一段声音描述') 铸声, 再用它说台词。"
                             f"现有角色: {store.actor_names() or '(还没有)'}")
         model_id = CLONE_MODEL_ID
@@ -363,8 +363,8 @@ def import_actor(name, audio_path, transcript, force=False):
     if not src.is_file():
         raise UserError(f"找不到 {src}")
     if store.load_actor(name) is not None and not force:
-        raise UserError(f"actor '{name}' 已存在。覆盖会让它之前所有台词的音色对不上 —— "
-                        f"确实要换就传 force=True。")
+        raise Conflict(f"actor '{name}' 已存在。覆盖会让它之前所有台词的音色对不上 —— "
+                       f"确实要换就传 force=true。")
     wav, meta_path = store.actor_paths(name)
     tmp = wav.with_suffix(".wav.new")
     try:
@@ -375,7 +375,13 @@ def import_actor(name, audio_path, transcript, force=False):
         tmp.unlink(missing_ok=True)
         raise UserError(f"读不了这个 WAV ({e})。只收 16-bit PCM WAV; 其它格式先转:\n"
                         f"  ffmpeg -i {src} -acodec pcm_s16le -ac 1 -ar 24000 ref.wav")
-    _commit(tmp, wav, check_audio)
+    # 这里的退化产物是调用方给的文件不合格, 不是引擎算错 —— 换成 UserError, 于是
+    # error_code 是 invalid 而不是 engine_error。同一个 DegenerateOutput, 生成路径上
+    # 归引擎、导入路径上归入参, 只有这两处分别知道自己是哪一种。
+    try:
+        _commit(tmp, wav, check_audio)
+    except DegenerateOutput as e:
+        raise UserError(f"这段录音本身不合格: {e}")
     meta = store.save_meta(meta_path, {
         "name": name, "voice": f"(导入自 {src.name})", "transcript": transcript.strip(),
         "reference_path": str(wav),
@@ -405,8 +411,8 @@ def import_subject(name, image_path, appearance, kind=DEFAULT_SUBJECT_KIND, forc
     if not src.is_file():
         raise UserError(f"找不到 {src}")
     if store.load_subject(name) is not None and not force:
-        raise UserError(f"subject '{name}' 已存在。覆盖会让它之前所有场景图的外观对不上 —— "
-                        f"确实要换就传 force=True。")
+        raise Conflict(f"subject '{name}' 已存在。覆盖会让它之前所有场景图的外观对不上 —— "
+                       f"确实要换就传 force=true。")
     png, meta_path = store.subject_paths(name)
     try:
         img = Image.open(src)
@@ -423,7 +429,10 @@ def import_subject(name, image_path, appearance, kind=DEFAULT_SUBJECT_KIND, forc
         raise
     except Exception as e:
         raise UserError(f"读不了这张图: {e}")
-    _commit(tmp, png, check_image)
+    try:
+        _commit(tmp, png, check_image)        # 同上: 导入路径上的退化图是入参问题
+    except DegenerateOutput as e:
+        raise UserError(f"这张图本身不合格: {e}")
     meta = store.save_meta(meta_path, {
         "name": name, "kind": kind, "appearance": appearance.strip(),
         "reference_path": str(png), "imported_from": str(src),

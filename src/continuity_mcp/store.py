@@ -12,6 +12,7 @@ import os
 import time
 
 from .config import ACTORS_DIR, SUBJECTS_DIR, NAME_RE
+from .errors import NotFound, UserError
 
 
 def _safe(name):
@@ -23,7 +24,7 @@ def _safe(name):
     收在这里而不是各个工具里, 是因为所有路径都从这一个函数出去。"""
     name = (name or "").strip()
     if not NAME_RE.match(name):
-        raise ValueError("名字只能是字母/数字/下划线/连字符/中文, 1~40 字")
+        raise UserError("名字只能是字母/数字/下划线/连字符/中文, 1~40 字")
     return name
 
 
@@ -81,7 +82,9 @@ def drop(paths, kind, name):
     """删掉一个角色/物件。不可逆 —— 参考产物不可复现。"""
     gone = [p for p in paths if p.is_file()]
     if not gone:
-        raise FileNotFoundError(f"{kind} '{name}' 不存在")
+        # NotFound 而不是 FileNotFoundError: "这个名字没有"和"这个名字已经有了"是调用方
+        # 要区分对待的两件事 (404 / 409), 而只有这里知道是哪一件。判断留在知道答案的地方。
+        raise NotFound(f"{kind} '{name}' 不存在")
     for p in gone:
         p.unlink()
     return len(gone)

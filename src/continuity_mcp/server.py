@@ -21,13 +21,14 @@ import os
 import sys
 import threading
 import time
+from dataclasses import asdict
 from typing import Annotated
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp_types import CallToolResult, TextContent
 from PIL import Image as PILImage
 
-from . import cutout, engines, jobs, results, sfx, store
+from . import cutout, engines, errors, jobs, results, sfx, store
 from .config import (GENERATED_DIR, ACTORS_DIR, SUBJECTS_DIR, STATE_DIR, ENABLE_IMAGE,
                      ENABLE_AUDIO, DEFAULT_CUTOUT_QUALITY, RETENTION_DAYS, CLEANUP_INTERVAL_S,
                      MAX_SPEECH_CHARS, AUDIO_IDLE_UNLOAD_S, SD_SERVER, AUDIO_SERVER,
@@ -61,9 +62,15 @@ def _res(_model, _text, _image=None, **fields):
                           structured_content=_model(**fields).model_dump(mode="json"))
 
 
-def _fail(_model, prefix, e):
-    """失败: 人话照旧是那句指令式中文, 结构化那份给出无歧义的 ok=False。"""
-    return _res(_model, f"{prefix}: {e}", ok=False, error=str(e))
+def _fail(_model, prefix, e, code=None):
+    """失败: 人话照旧是那句指令式中文, 结构化那份给出无歧义的 ok=False + error_code。
+
+    code 默认由异常类型推出来 (errors.error_code) —— 所有失败都从这里出去, 所以分类
+    只要在抛异常的那一层做对, 这里就自动是对的。只有"同一个异常类型在两个调用点含义
+    不同"时才显式传 code (例如打不开参考图: 那是入参问题, 不是引擎问题)。
+    """
+    return _res(_model, f"{prefix}: {e}", ok=False, error=str(e),
+                error_code=code or errors.error_code(e))
 
 
 def _image_block(path):
@@ -114,7 +121,7 @@ if ENABLE_AUDIO:
         改由克隆模型照着这段参考音说, 音色与台词内容无关。实测极差降到 5 Hz。
 
         重要: 铸完请先听那段试音, 确认是不是你要的那个人。铸砸了会把整个角色锁死在
-        错的音色上, 而且它之后每一句都错得很一致。不满意就 force=True 重铸。
+        错的音色上, 而且它之后每一句都错得很一致。不满意就 force=true 重铸。
 
         参数:
             name: 角色名(字母/数字/下划线/连字符/中文, 1~40 字), 之后 actor_tts 用它指代
@@ -142,7 +149,7 @@ if ENABLE_AUDIO:
                     f"角色 '{m['name']}' 已铸声 (参考音 {m['ref_seconds']:.1f}s)。\n"
                     f"试音: {m['reference_path']}\n"
                     f"(念的是: {m['transcript']}){clip}\n"
-                    f"先听一遍确认是不是你要的人, 不满意用 create_actor(..., force=True) 重铸。",
+                    f"先听一遍确认是不是你要的人, 不满意用 create_actor(..., force=true) 重铸。",
                     ok=True, warnings=warns, name=m["name"], voice=m.get("voice"),
                     reference_path=m["reference_path"], ref_seconds=m["ref_seconds"],
                     transcript=m["transcript"], seed=m.get("seed"),
@@ -300,14 +307,15 @@ if ENABLE_AUDIO:
 
 if ENABLE_IMAGE:
 
-    async def _pin(name, appearance, kind, width, height, seed, force, label):
+    async def _pin(name, appearance, kind, width, height, seed, force, label, steps, cfg):
         try:
-            m = await _go(jobs.create_subject, name, appearance, kind, width, height, seed, force)
+            m = await _go(jobs.create_subject, name, appearance, kind, width, height, seed, force,
+                          steps, cfg)
         except Exception as e:
             return _fail(results.SubjectResult, "定妆失败", e)
         return _res(results.SubjectResult,
                     f"{label} '{m['name']}' 已定妆。\n定妆图: {m['reference_path']}\n"
-                    f"先看一眼确认是不是你要的, 不满意用 force=True 重定。",
+                    f"先看一眼确认是不是你要的, 不满意用 force=true 重定。",
                     _image=m["reference_path"],
                     ok=True, name=m["name"], kind=m["kind"], appearance=m["appearance"],
                     reference_path=m["reference_path"], seed=m.get("seed"))
@@ -319,7 +327,8 @@ if ENABLE_IMAGE:
     # 并逐次校验。图片没丢, 结构化也有了。
     @mcp.tool()
     async def create_character(name: str, appearance: str, width: int = 512, height: int = 512,
-                               seed: int = None, force: bool = False
+                               seed: int = None, force: bool = False,
+                               num_inference_steps: int = None, guidance_scale: float = None
                                ) -> Annotated[CallToolResult, results.SubjectResult]:
         """给一个人物定妆(生成并存下参考图), 之后 subject_image 出的每张图长相都一致。
 
@@ -342,13 +351,15 @@ if ENABLE_IMAGE:
         不要写场景、动作、表情 —— 那些留给 subject_image 的 scene。
 
         定完先看返回的定妆图确认是不是你要的人; 定砸了会把整个角色锁死在错的长相上,
-        不满意就 force=True 重定。
+        不满意就 force=true 重定。
         """
-        return await _pin(name, appearance, "character", width, height, seed, force, "人物")
+        return await _pin(name, appearance, "character", width, height, seed, force, "人物",
+                          num_inference_steps, guidance_scale)
 
     @mcp.tool()
     async def create_animal(name: str, appearance: str, width: int = 512, height: int = 512,
-                            seed: int = None, force: bool = False
+                            seed: int = None, force: bool = False,
+                            num_inference_steps: int = None, guidance_scale: float = None
                             ) -> Annotated[CallToolResult, results.SubjectResult]:
         """给一只动物/坐骑/灵兽定妆, 之后每张图它都是同一只。
 
@@ -360,13 +371,15 @@ if ENABLE_IMAGE:
         鞍具、缰绳这类可穿卸的东西和人物的服装同理: 写进 appearance 只是默认值,
         scene 里可以换掉。不要写场景和动作。
 
-        定完先看定妆图, 不满意 force=True 重定。
+        定完先看定妆图, 不满意 force=true 重定。
         """
-        return await _pin(name, appearance, "animal", width, height, seed, force, "动物")
+        return await _pin(name, appearance, "animal", width, height, seed, force, "动物",
+                          num_inference_steps, guidance_scale)
 
     @mcp.tool()
     async def create_object(name: str, appearance: str, width: int = 512, height: int = 512,
-                            seed: int = None, force: bool = False
+                            seed: int = None, force: bool = False,
+                            num_inference_steps: int = None, guidance_scale: float = None
                             ) -> Annotated[CallToolResult, results.SubjectResult]:
         """给一件道具/物件定妆, 之后每张图它都长一个样, 换角度也不变。
 
@@ -380,9 +393,10 @@ if ENABLE_IMAGE:
           - 五金件/纹饰及其位置(锁扣、包角、铆钉在哪)
         不要写场景和角度 —— 角度留给 subject_image 的 scene。
 
-        定完先看定妆图, 不满意 force=True 重定。
+        定完先看定妆图, 不满意 force=true 重定。
         """
-        return await _pin(name, appearance, "object", width, height, seed, force, "物件")
+        return await _pin(name, appearance, "object", width, height, seed, force, "物件",
+                          num_inference_steps, guidance_scale)
 
     @mcp.tool()
     async def import_subject(name: str, image_path: str, appearance: str,
@@ -424,7 +438,9 @@ if ENABLE_IMAGE:
 
     @mcp.tool()
     async def subject_image(subject: str, scene: str, width: int = 512, height: int = 512,
-                            seed: int = None) -> Annotated[CallToolResult, results.ImageResult]:
+                            seed: int = None, num_inference_steps: int = None,
+                            guidance_scale: float = None
+                            ) -> Annotated[CallToolResult, results.ImageResult]:
         """让某个已定妆的角色或物件出一张新图, 外观与它之前每一张都一致。
 
         做游戏素材用这个, 不要用 generate_image —— 后者每张长相会变。
@@ -438,11 +454,14 @@ if ENABLE_IMAGE:
                    里那身衣服而保住脸。
             width/height: 上限 1024
             seed: 随机种子(可选)
+            num_inference_steps: 采样步数(可选, 不传用引擎默认)。多了更精细也更慢
+            guidance_scale: 提示词贴合度(可选, 不传用引擎默认)。高了更贴提示词但更容易糊
 
         返回: 本机路径
         """
         try:
-            r = await _go(jobs.subject_image, subject, scene, width, height, seed)
+            r = await _go(jobs.subject_image, subject, scene, width, height, seed,
+                          num_inference_steps, guidance_scale)
         except Exception as e:
             return _fail(results.ImageResult, "出图失败", e)
         return _res(results.ImageResult, f"{subject} 的新图已生成: {r['path']}",
@@ -477,7 +496,8 @@ if ENABLE_IMAGE:
 
     @mcp.tool()
     async def generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: int = None,
-                             reference_image_path: str = None
+                             reference_image_path: str = None, num_inference_steps: int = None,
+                             guidance_scale: float = None
                              ) -> Annotated[CallToolResult, results.ImageResult]:
         """生成一张一次性图片 —— 不保证与任何其它图一致。
 
@@ -489,6 +509,8 @@ if ENABLE_IMAGE:
             width/height: 上限 1024
             seed: 随机种子(可选)
             reference_image_path: 参考图的本机路径(可选), 传了就是图生图
+            num_inference_steps: 采样步数(可选, 不传用引擎默认)。多了更精细也更慢
+            guidance_scale: 提示词贴合度(可选, 不传用引擎默认)。高了更贴提示词但更容易糊
 
         返回: 本机路径
         """
@@ -498,9 +520,11 @@ if ENABLE_IMAGE:
                 with open(reference_image_path, "rb") as f:
                     ref = base64.b64encode(f.read()).decode()
             except OSError as e:
-                return _fail(results.ImageResult, "读不到参考图", e)
+                # 路径给错了是入参问题 —— OSError 本身推不出这一点, 所以在这里说清楚
+                return _fail(results.ImageResult, "读不到参考图", e, code=errors.INVALID)
         try:
-            r = await _go(jobs.generate_image, prompt, width, height, seed, ref)
+            r = await _go(jobs.generate_image, prompt, width, height, seed, ref,
+                          num_inference_steps, guidance_scale)
         except Exception as e:
             return _fail(results.ImageResult, "图片生成失败", e)
         tail = f" (尺寸被限制到 {r['clamped']['width']}x{r['clamped']['height']})" if r["clamped"] else ""
@@ -546,6 +570,10 @@ async def remove_bg(image_path: str = None, image_base64: str = None, mode: str 
     """
     try:
         img = _open_image(image_path, image_base64)
+    except Exception as e:
+        # 打不开的图是入参问题 (路径不对 / 不是图片), 不是我们这边出了意外
+        return _fail(results.CutoutResult, "抠图失败", e, code=errors.INVALID)
+    try:
         path, data = await asyncio.to_thread(
             cutout.remove_bg, img, mode, quality or DEFAULT_CUTOUT_QUALITY,
             jobs._new_name("cut", "png"), GENERATED_DIR)
@@ -559,7 +587,8 @@ async def remove_bg(image_path: str = None, image_base64: str = None, mode: str 
         out += f"\n⚠️ {data['warning']}"
     return _res(results.CutoutResult, out, ok=True, warnings=warns, path=str(path),
                 mode_used=data["mode_used"], model=data.get("model"),
-                transparent_ratio=data["transparent_ratio"])
+                transparent_ratio=data["transparent_ratio"], metrics=data.get("metrics"),
+                checker_evidence=data.get("checker_evidence"))
 
 
 @mcp.tool()
@@ -581,6 +610,9 @@ async def slice_sheet(image_path: str = None, image_base64: str = None,
     """
     try:
         img = _open_image(image_path, image_base64)
+    except Exception as e:
+        return _fail(results.SliceResult, "切图失败", e, code=errors.INVALID)
+    try:
         paths = await asyncio.to_thread(
             cutout.slice_sheet, img, rows, cols, frame_width, frame_height, trim,
             lambda: jobs._new_name("frame", "png"), GENERATED_DIR)
@@ -609,8 +641,10 @@ async def gen_sfx(preset: str = "select", seed: int = None, base_freq: float = N
         wave: 覆盖波形 square / saw / sine / triangle / noise
         overrides: 覆盖任意合成参数的字典, 例如
                    {"freq_slide": -3.0, "release": 0.4, "lpf": 0.5, "duty": 0.25}
+                   可覆盖的完整字段名和默认值: 调 sfx_presets()
 
-    返回: 44.1kHz 16bit 单声道 WAV 的本机路径
+    返回: 44.1kHz 16bit 单声道 WAV 的本机路径。结构化返回里的 params 是这一枚音效
+    用到的全部合成参数 —— 拿它加一点改动再调一次, 就能做出一整组同族音效。
     """
     ov = dict(overrides or {})
     if base_freq is not None:
@@ -628,7 +662,27 @@ async def gen_sfx(preset: str = "select", seed: int = None, base_freq: float = N
                 f"音效已生成: {path} (preset {preset}, seed {seed}, "
                 f"时长 {x.size / sfx.SFX_RATE:.3f}s, 波形 {p.wave}, 基频 {p.base_freq:.0f}Hz)",
                 ok=True, path=str(path), preset=preset, seed=seed,
-                duration=x.size / sfx.SFX_RATE, wave=p.wave, base_freq=p.base_freq)
+                duration=round(x.size / sfx.SFX_RATE, 4), wave=p.wave, base_freq=p.base_freq,
+                params=asdict(p))
+
+
+@mcp.tool()
+async def sfx_presets() -> Annotated[CallToolResult, results.SfxPresetsResult]:
+    """列出 gen_sfx 能用的 preset, 以及 overrides 里可以覆盖的全部字段和它们的默认值。
+
+    先看这里再去 overrides: 字段名写错了 gen_sfx 会直接失败, 而"有哪些字段"是猜不出来的
+    (占空比扫描叫 duty_sweep 还是 duty_slide, 低通叫 lpf 还是 cutoff)。
+
+    返回: preset 名单 + 参数默认值表 + 采样率。
+    """
+    params = asdict(sfx.SfxParams())
+    return _res(results.SfxPresetsResult,
+                "preset: " + " / ".join(sorted(sfx.SFX_PRESETS)) + "\n"
+                f"波形: {' / '.join(sfx.SFX_WAVES)}\n"
+                f"采样率: {sfx.SFX_RATE} Hz\n"
+                "overrides 可覆盖的字段 (名字: 默认值):\n"
+                + "\n".join(f"  {k}: {v}" for k, v in params.items()),
+                ok=True, presets=sorted(sfx.SFX_PRESETS), params=params, rate=sfx.SFX_RATE)
 
 
 @mcp.tool()
@@ -641,8 +695,8 @@ async def continuity_status() -> Annotated[CallToolResult, results.StatusResult]
     ok, down = await asyncio.to_thread(engines.health)
     actors, subjects = store.actor_names(), store.subject_names()
     lines = [f"引擎: {'全部在线' if ok else '连不上 —— ' + '、'.join(down)}",
-             f"  sd-server      {SD_SERVER}    {'启用' if ENABLE_IMAGE else '未启用 (显存不足, 只装了音频那半)'}",
-             f"  audiocpp-server {AUDIO_SERVER}  {'启用' if ENABLE_AUDIO else '未启用'}",
+             f"  sd_server      {SD_SERVER}    {'启用' if ENABLE_IMAGE else '未启用 (显存不足, 只装了音频那半)'}",
+             f"  audiocpp_server {AUDIO_SERVER}  {'启用' if ENABLE_AUDIO else '未启用'}",
              f"资产目录: {STATE_DIR}",
              f"  角色 {len(actors)} 个, 定妆 {len(subjects)} 个",
              f"抠图默认档: {DEFAULT_CUTOUT_QUALITY}",
@@ -654,9 +708,9 @@ async def continuity_status() -> Annotated[CallToolResult, results.StatusResult]
     return _res(results.StatusResult, "\n".join(lines), ok=True,
                 engines_ok=ok, engines_down=down,
                 image=results.EngineInfo(url=SD_SERVER, enabled=ENABLE_IMAGE,
-                                         reachable="sd-server" not in down),
+                                         reachable="sd_server" not in down),
                 audio=results.EngineInfo(url=AUDIO_SERVER, enabled=ENABLE_AUDIO,
-                                         reachable="audiocpp-server" not in down),
+                                         reachable="audiocpp_server" not in down),
                 state_dir=str(STATE_DIR), actors=len(actors), subjects=len(subjects),
                 cutout_quality=DEFAULT_CUTOUT_QUALITY, idle_unload_s=AUDIO_IDLE_UNLOAD_S,
                 setup_needed=setup_needed)

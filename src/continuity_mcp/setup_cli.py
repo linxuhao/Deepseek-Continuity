@@ -174,7 +174,7 @@ def wait_healthy(env, profiles, timeout=300):
     while time.time() < deadline:
         ok, down = engines.health()
         # 只装了音频时 sd-server 本来就不该在
-        down = [d for d in down if not (d.startswith("sd-server") and "image" not in profiles)]
+        down = [d for d in down if not (d.startswith("sd_server") and "image" not in profiles)]
         if not down:
             return True, []
         time.sleep(3)

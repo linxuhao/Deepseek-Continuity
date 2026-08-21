@@ -84,7 +84,9 @@ def _http_detail(he):
         msg = (json.loads(body).get("error") or {}).get("message")
     except Exception:
         msg = None
-    return f"HTTP {he.code}: {(msg or body or he.reason)[:400]}"
+    # 无冒号 —— 和 media-gen 的 "HTTP 400 <msg>" 逐字一致。外壳两边都要解析这一行,
+    # 格式漂开一个冒号就够让它判错。
+    return f"HTTP {he.code} {(msg or body or he.reason)[:400]}"
 
 
 SETUP_HINT = (
@@ -140,22 +142,22 @@ def sd_generate(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b6
     if ref_b64:
         payload["ref_images"] = [ref_b64]             # base64 参考图 -> 图生图
     # 提交是非幂等的: 连不上可以重试 (还没到引擎), 但超时不行 (可能已经排上了)。
-    sub = post(f"{SD_SERVER}/sdcpp/v1/img_gen", payload, "sd-server", timeout=60,
+    sub = post(f"{SD_SERVER}/sdcpp/v1/img_gen", payload, "sd_server", timeout=60,
                retry_timeouts=False)
     poll = f"{SD_SERVER}{sub['poll_url']}"
     deadline = time.time() + JOB_TIMEOUT_S
     while True:
         st = get(poll)
         if st.get("error"):
-            raise RuntimeError(f"sd-server: {st['error']}")
+            raise RuntimeError(f"sd_server: {st['error']}")
         if st.get("result"):
             break
         if time.time() > deadline:
-            raise TimeoutError(f"sd-server job {sub.get('id')} exceeded {JOB_TIMEOUT_S}s")
+            raise TimeoutError(f"sd_server job {sub.get('id')} exceeded {JOB_TIMEOUT_S}s")
         time.sleep(0.5)
     imgs = st["result"].get("images") or []
     if not imgs:
-        raise RuntimeError("sd-server returned no images")
+        raise RuntimeError("sd_server returned no images")
     return (base64.b64decode(imgs[0]["b64_json"]),
             st["result"].get("output_format") or "png")
 
@@ -203,7 +205,7 @@ def release_all_but(keep=None, reason="", timeout=120):
         # retry_s=0: 这是 best-effort 的清理, 失败只是少省一点显存。早先它跟着默认值
         # 重试 180s, 于是引擎不在时, 每个任务在真正开始之前先白等三分钟。
         post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others},
-             "audiocpp-server", timeout=timeout, retry_s=0)
+             "audiocpp_server", timeout=timeout, retry_s=0)
         if keep is None:
             _audio_state["loaded"] = False
             log.info("音频模型已全部卸载%s, 显卡回到零常驻", f" ({reason})" if reason else "")
@@ -277,7 +279,7 @@ def shutdown():
 # ---- 语音 ----
 
 def tts(model_id, text, voice_ref_b64=None, reference_text=None, instructions=None,
-        seed=None, speaking_rate=None, tag="audiocpp-server"):
+        seed=None, speaking_rate=None, tag="audiocpp_server"):
     """合成一句语音。
 
     走 /v1/audio/speech 而不是 /v1/tasks/run, 因为只有前者能收内联的参考音 ——
@@ -330,8 +332,8 @@ def health():
     只返回名字, 不返回长报错: 每条都带一遍"去跑 continuity-setup"的话, 两个引擎
     就是两遍, 而 continuity_status 自己还会再说一遍。提示只该出现一次。"""
     down = []
-    for name, url in (("sd-server", f"{SD_SERVER}/sdcpp/v1/capabilities"),
-                      ("audiocpp-server", f"{AUDIO_SERVER}/health")):
+    for name, url in (("sd_server", f"{SD_SERVER}/sdcpp/v1/capabilities"),
+                      ("audiocpp_server", f"{AUDIO_SERVER}/health")):
         try:
             get(url, timeout=5, tag=name)
         except Exception:
