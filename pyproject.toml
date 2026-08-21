@@ -32,6 +32,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/continuity_mcp"]
 
-[tool.hatch.build.targets.wheel.force-include]
-# compose / Dockerfile / 权重清单要跟着轮子走 —— continuity-setup 靠它们干活
-"src/continuity_mcp/deploy" = "continuity_mcp/deploy"
+# deploy/ (compose / Dockerfile / 权重清单) 就在包目录里, hatchling 会连非 .py 文件
+# 一起打进去 —— 不需要 force-include, 加了反而会把同一个文件塞两次,
+# 构建直接失败。editable 装看不出来 (它不打包), 只有真正 pip install 才炸。
