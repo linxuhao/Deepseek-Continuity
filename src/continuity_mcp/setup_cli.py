@@ -60,7 +60,7 @@ def download_models(models_dir, groups):
         from huggingface_hub import hf_hub_download
     except ImportError:
         die("缺 huggingface_hub。装法: pip install huggingface_hub\n"
-            f"  (或者用 uvx 跑本工具: uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup)")
+            "  (或者用 uvx 跑本工具: uvx --from dsh-continuity continuity-setup)")
     manifest = json.loads((DEPLOY / "models.json").read_text(encoding="utf-8"))
     todo = [m for m in manifest["models"] if m["group"] in groups]
     total = sum(m["size_bytes"] for m in todo) / preflight.GIB
@@ -245,8 +245,7 @@ def _print_done(state_dir, report, env, profiles, mode="dri"):
     say("          serverName: continuity")
     say("          transport: stdio")
     say("          command: uvx")
-    say("          args: ['--from', 'git+https://github.com/linxuhao/Deepseek-Continuity',")
-    say("                 'continuity-mcp']")
+    say("          args: ['--from', 'dsh-continuity', 'continuity-mcp']")
     say("          env:  # 下面这些")
     say("")
     say("本机对应的环境变量:")
@@ -258,7 +257,7 @@ def _print_done(state_dir, report, env, profiles, mode="dri"):
         say("  CONTINUITY_ENABLE_IMAGE=0 \\")
     say(f"  CONTINUITY_CUTOUT_QUALITY={report['cutout_quality']} \\")
 
-    say(f"  uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-mcp")
+    say("  uvx --from dsh-continuity continuity-mcp")
     say("")
     say("引擎的开关:")
     say(f"  docker compose -p continuity {' '.join(f'--profile {p}' for p in profiles)} stop|start")

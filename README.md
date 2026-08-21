@@ -16,28 +16,21 @@ the same card.
 ## Install
 
 ```bash
-uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup
+uvx --from dsh-continuity continuity-setup
 ```
 
 That one command does the whole backend: preflight → build the engines → fetch only the weights
 this machine can use → start them.
 
-> **Not on PyPI or npm yet.** Install from the repo, as above. Note that the PyPI name
-> `continuity-mcp` belongs to an unrelated project — do **not** `uvx continuity-mcp`.
-> The dsh bundle in `bundle/` is likewise unpublished; wire it by hand for now:
+> The PyPI distribution is **`dsh-continuity`** (the import name stays `continuity_mcp`). It is *not*
+> `continuity-mcp` — that name on PyPI belongs to an unrelated project, so do not `uvx
+> continuity-mcp`.
 >
-> ```yaml
-> - insert:
->     - id: continuity
->       name: '@deepseek-ai/dsh-mcp-client'
->       config:
->         serverName: continuity
->         transport: stdio
->         command: uvx
->         args: ['--from', 'git+https://github.com/linxuhao/Deepseek-Continuity', 'continuity-mcp']
+> Until the first release lands, install straight from the repo — this works today:
+>
+> ```bash
+> uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup
 > ```
->
-> (full version with the env passthrough: [`bundle/cordis.patch.yml`](bundle/cordis.patch.yml))
 
 `continuity-setup` checks the machine before it downloads anything, and sizes the install to
 what it finds. Run `continuity-setup --check` first to see what it would do — that reads

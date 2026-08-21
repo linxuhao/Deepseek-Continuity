@@ -1,5 +1,5 @@
 [project]
-name = "continuity-mcp"
+name = "dsh-continuity"
 version = "0.1.0"
 description = "Asset consistency and output verification for agent-generated game media. Local Vulkan backends, zero VRAM when idle."
 readme = "README.md"
@@ -24,6 +24,9 @@ Homepage = "https://github.com/linxuhao/Deepseek-Continuity"
 [project.scripts]
 continuity-mcp = "continuity_mcp.server:main"
 continuity-setup = "continuity_mcp.setup_cli:main"
+
+# 分发名 dsh-continuity, import 名仍是 continuity_mcp —— 两者不必相同。
+# 不叫 continuity-mcp 是因为 PyPI 上那个名字属于另一个无关项目 (2026-07 起)。
 
 [build-system]
 requires = ["hatchling"]

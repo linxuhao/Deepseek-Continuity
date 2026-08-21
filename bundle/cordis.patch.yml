@@ -3,7 +3,7 @@
 # import_actor / import_subject / subject_image / remove_bg / gen_sfx / ...)。
 #
 # 后端引擎不在这里起 —— 先跑一次:
-#     uvx --from git+https://github.com/linxuhao/Deepseek-Continuity continuity-setup
+#     uvx --from dsh-continuity continuity-setup
 # 它会体检本机 (显存/内存/磁盘)、编引擎镜像、只下这台机器用得上的权重、把两个
 # ggml/Vulkan 引擎跑起来, 并按显存把下面这些变量该设的设好。
 #
@@ -16,10 +16,11 @@
         serverName: continuity
         transport: stdio
         command: uvx
-        # 从本仓库装, 不从 PyPI 按名字解析。
-        # PyPI 上的 `continuity-mcp` 是另一个完全无关的项目 (别人的, 2026-07 起就在),
-        # 写成 `uvx continuity-mcp` 会在每次启动时把那个包拉下来跑。
-        args: ['--from', 'git+https://github.com/linxuhao/Deepseek-Continuity', 'continuity-mcp']
+        # 分发名是 dsh-continuity, 不是 continuity-mcp —— PyPI 上那个名字属于另一个
+        # 完全无关的项目 (2026-07 起就在)。写成 `uvx continuity-mcp` 会在每次启动时
+        # 把那个包拉下来跑, 而这里是运行时解析, 错了不会有人发现。
+        # 还没发布之前用: ['--from', 'git+https://github.com/linxuhao/Deepseek-Continuity', 'continuity-mcp']
+        args: ['--from', 'dsh-continuity', 'continuity-mcp']
         # env 是 z.dict(String): 值不能是 undefined, 否则整个 profile 加载失败。
         # 所以每个都 `?? ''` —— MCP server 那边把空串当成"没设", 用它自己的默认值。
         env:
