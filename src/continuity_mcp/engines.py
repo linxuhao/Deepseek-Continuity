@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
                      AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
@@ -133,6 +134,29 @@ def engine_retry_budget():
 def post(url, payload, tag, timeout=None, retry_s=None, retry_timeouts=True):
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    return _http(req, timeout or JOB_TIMEOUT_S, tag,
+                 retry_s=engine_retry_budget() if retry_s is None else retry_s,
+                 retry_timeouts=retry_timeouts)
+
+
+def post_multipart(url, fields, file_part, tag, timeout=None, retry_s=None,
+                   retry_timeouts=True):
+    """multipart/form-data 版的 post。
+
+    只有一个端点用它 (/v1/audio/transcriptions), 但那个端点没有别的选择, 见 transcribe()。
+    自己拼而不引 requests: 全包到这里为止没有任何第三方 HTTP 依赖, 为一个 form 破例
+    不值当 —— 这段拼接是死的, 二十行, 没有需要维护的分支。
+    """
+    name, filename, data = file_part
+    b = uuid.uuid4().hex
+    buf = bytearray()
+    for k, v in fields.items():
+        buf += (f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n').encode()
+    buf += (f'--{b}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+            f'Content-Type: audio/wav\r\n\r\n').encode()
+    buf += data + b"\r\n" + f"--{b}--\r\n".encode()
+    req = urllib.request.Request(url, data=bytes(buf),
+                                 headers={"Content-Type": f"multipart/form-data; boundary={b}"})
     return _http(req, timeout or JOB_TIMEOUT_S, tag,
                  retry_s=engine_retry_budget() if retry_s is None else retry_s,
                  retry_timeouts=retry_timeouts)
@@ -323,6 +347,34 @@ def tts(model_id, text, voice_ref_b64=None, reference_text=None, instructions=No
     if not b64:
         raise RuntimeError(f"{model_id} returned no audio: {str(res)[:300]}")
     return base64.b64decode(b64), res.get("timing") or {}
+
+
+def transcribe(model_id, audio_bytes, filename="audio.wav", language=None,
+               tag="audiocpp_server"):
+    """把一段录音听成文字。
+
+    走 multipart 而不是 JSON, 和 tts() 走 /v1/audio/speech 是同一件事: 这个端点的
+    JSON 形式三个字段 (audio / audio_path / file) 收的都是**引擎本机的路径**, 而引擎
+    不一定和我们在同一台机器上。只有 multipart 是把音频本身发过去的, 引擎一行文件
+    系统都不用碰 —— 跨机因此成立。
+    (引擎目前只收 WAV: "only WAV audio uploads are currently supported for transcription"。)
+
+    实测 (Qwen3-ASR 1.7B Q8_0, RX 7800 XT, 9.5 s 参考音): 冷启 3.9 s (其中加载约 2.4 s),
+    热调 0.4 s, RTF 0.042。
+    """
+    release_all_but(model_id)
+    fields = {"model": model_id}
+    if language:
+        fields["language"] = language
+    res = post_multipart(f"{AUDIO_SERVER}/v1/audio/transcriptions", fields,
+                         ("file", filename, audio_bytes), tag)
+    text = (res.get("text") or "").strip()
+    if not text:
+        # 空转写不当成"成功但没内容": 调用它的两处 (transcribe 工具、import_actor 自动
+        # 听写) 拿到空字符串都没法往下走, 而静默的空串会一路变成一个 transcript 为空
+        # 的角色 —— 那正是克隆对不齐的起点。
+        raise RuntimeError(f"{model_id} 听不出内容 (是不是静音或纯噪声?): {str(res)[:200]}")
+    return text, res.get("timing") or {}
 
 
 def engines_share_a_gpu():

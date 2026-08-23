@@ -156,7 +156,8 @@ if ENABLE_AUDIO:
                     truncated=bool(m.get("clipped")))
 
     @mcp.tool()
-    async def import_actor(name: str, audio_path: str, transcript: str, force: bool = False
+    async def import_actor(name: str, audio_path: str, transcript: str = None,
+                           force: bool = False
                            ) -> Annotated[CallToolResult, results.ActorResult]:
         """用一段现成的录音铸声 —— 声音是别处做的(真人录音 / 其它 TTS)也照样能保持一致。
 
@@ -168,8 +169,9 @@ if ENABLE_AUDIO:
             audio_path: 录音的本机路径。16-bit PCM WAV, 2~30 秒, 单人清唱式的干净人声
                         最好(没有背景音乐和混响)。采样率/声道数会自动转成 24 kHz 单声道。
                         其它格式先转: ffmpeg -i 原文件 -acodec pcm_s16le -ac 1 -ar 24000 ref.wav
-            transcript: 那段录音里念的是什么 —— 必填。克隆模型要拿它对齐音频和文字,
-                        写错了音色会明显不对。
+            transcript: 那段录音里念的是什么。不给就自动听写一遍填上, 但那是机器听的,
+                        会在返回里标出来让你核 —— 克隆模型拿它对齐音频和文字, 错一个词
+                        音色就会明显不对。手上有准确的文字就直接给, 别让它猜。
             force: 覆盖已有角色
 
         注意: 你有权使用这段声音才导入它。克隆一个真人的嗓子在很多地方是需要本人同意的。
@@ -178,8 +180,8 @@ if ENABLE_AUDIO:
             m = await _go(jobs.import_actor, name, audio_path, transcript, force)
         except Exception as e:
             return _fail(results.ActorResult, "导入失败", e)
-        warns = [m["lowband"]] if m.get("lowband") else []
-        warn = f"\n⚠️ {m['lowband']}" if m.get("lowband") else ""
+        warns = [m[k] for k in ("heard", "lowband") if m.get(k)]
+        warn = "".join(f"\n⚠️ {w}" for w in warns)
         return _res(results.ActorResult,
                     f"角色 '{m['name']}' 已从录音铸声 ({m['source_format']})。\n"
                     f"参考音: {m['reference_path']}\n"
@@ -239,6 +241,33 @@ if ENABLE_AUDIO:
             return _fail(results.DeleteResult, "删除失败", e)
         return _res(results.DeleteResult, f"已删除 actor '{name}' ({n} 个文件)",
                     ok=True, name=name, kind="actor", files_removed=n)
+
+    @mcp.tool()
+    async def transcribe(audio_path: str, language: str = None
+                         ) -> Annotated[CallToolResult, results.TranscriptResult]:
+        """听一段录音, 返回里面说的文字。
+
+        两个用处, 都是"核对"而不是"生产字幕":
+          - 导入参考音时不知道那段录音念的是什么 —— import_actor 不给 transcript 就是
+            自动调它, 也可以先单独调一次看看听出来的对不对。
+          - 验稿: 配完一句台词, 听回来和台词原文比一比。克隆模型偶尔会吞掉尾巴,
+            而那种"少了半句"的产物听起来完全正常, 只有把它听成文字才看得见。
+
+        参数:
+            audio_path: 录音的本机路径, 只收 WAV
+            language: 语种提示 (可选, 如 zh / en)。不给就让模型自己判 ——
+                      它本来就带语种识别, 只有在把方言听成另一种语言时才需要指定。
+        """
+        try:
+            text, timing = await _go(jobs.transcribe, audio_path, language)
+        except Exception as e:
+            return _fail(results.TranscriptResult, "听写失败", e)
+        ms = timing.get("audio_duration_ms")
+        secs = round(ms / 1000, 1) if ms else None
+        return _res(results.TranscriptResult,
+                    f"听到的是: {text}",
+                    ok=True, text=text, language=language,
+                    audio_seconds=secs, source=str(audio_path))
 
     @mcp.tool()
     async def generate_speech(text: str, voice: str = None, seed: int = None,

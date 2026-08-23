@@ -149,6 +149,14 @@ class SubjectResult(Result):
     imported_from: str | None = None
 
 
+class TranscriptResult(Result):
+    """听写 (transcribe) 的结果。"""
+    text: str | None = None
+    language: str | None = None           # 请求时指定的语种; 没指定就是 None (引擎自己判)
+    audio_seconds: float | None = None    # 引擎报的音频时长
+    source: str | None = None             # 听的是哪个文件 (本机绝对路径)
+
+
 class ActorInfo(BaseModel):
     name: str
     voice: str | None = None

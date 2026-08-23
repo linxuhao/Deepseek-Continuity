@@ -275,7 +275,7 @@ def cmd_install(args):
             say("")
             say("  ⚠️ 这张卡装不了生图那半。")
             say("     (生图后端在别处的话, 用 --sd-server <url> 重跑 —— 那样工具照常可用。)")
-            if input("     只装音频那半 (铸声/配音/音乐/音效/抠图)? [y/N] ").strip().lower() \
+            if input("     只装音频那半 (铸声/配音/听写/音乐/音效/抠图)? [y/N] ").strip().lower() \
                     not in ("y", "yes"):
                 die("已取消。换一张 8 GiB 以上的卡, 或用 --sd-server 指向你自己的后端。", 0)
             local["image"] = False

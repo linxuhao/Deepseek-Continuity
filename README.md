@@ -85,7 +85,7 @@ hardware and changes nothing:
           未选 AMD Radeon RX 7900 XTX (RADV NAVI31) (24.0 GiB, 此刻可用 1.4 GiB)
           跳过 llvmpipe —— 软件渲染, 不是真显卡
   内存    30.9 GiB
-  磁盘    3118.4 GiB 可用 / 需要 30 GiB
+  磁盘    3118.4 GiB 可用 / 需要 34 GiB
   生图    启用
   音频    启用
   抠图默认档  best
@@ -107,7 +107,7 @@ Two details in there that exist because the naive version is wrong:
 |---|---|---|
 | **GPU** | **8 GiB VRAM** | Peak is 6.80 GiB (measured). Requests are serialized, so peak is one model, not the sum. |
 | **GPU API** | **Vulkan 1.2+** | **No CUDA, no ROCm.** Kernels are SPIR-V compiled at runtime. |
-| **Disk** | **30 GiB during install**, 19.5 GiB after | 17.4 weights + 2.1 runtime image + 8.5 build layers (reclaimable). |
+| **Disk** | **34 GiB during install**, 21.8 GiB after | 19.7 weights + 2.1 runtime image + 8.5 build layers (reclaimable). |
 | **Host RAM** | **16 GiB** (8 GiB workable — see below) | Driven by transient peaks, not idle. |
 | **CPU** | any x86-64 | Background removal runs on CPU. |
 
@@ -203,10 +203,10 @@ whether to install the audio half alone — it does not quietly substitute a dif
           Fake GTX 1060 只有 6.0 GiB, 而生图实测峰值 6.80 GiB, 需要 8 GiB。
           换更小的生图模型省不下这部分 (Q4 与 Q8 峰值相同 6.60 / 6.59), 降分辨率也不行
           —— 瓶颈是那个 8 GiB 不量化的文本编码器。
-          音频那半仍然可以装: 铸声/配音/音乐/音效/抠图都能用, 4 GiB 就够。
+          音频那半仍然可以装: 铸声/配音/听写/音乐/音效/抠图都能用, 4 GiB 就够。
 
   ⚠️ 这张卡装不了生图那半。
-     只装音频那半 (铸声/配音/音乐/音效/抠图)? [y/N]
+     只装音频那半 (铸声/配音/听写/音乐/音效/抠图)? [y/N]
 ```
 
 The audio-only install is a real product, not a consolation prize: casting voices, dialogue,
@@ -298,6 +298,14 @@ another tool — and everything downstream behaves identically. Audio is normali
 mono for you (44.1 kHz stereo in, verified: reference f0 identical, and an imported actor
 tracks a natively-cast one to 11 Hz).
 
+`import_actor` needs to know what the recording *says* — the clone aligns audio to text, and a
+wrong transcript is heard as a wrong voice. If you leave it out, it is transcribed for you and
+the result comes back flagged as machine-heard, so you can check the one line everything else
+depends on. The same tool is exposed on its own as `transcribe`, which is worth pointing at a
+line you just generated: a clone that swallowed the last two words sounds completely normal and
+only becomes visible once you read it back. (Both go through the ASR model, which loads on
+demand and is released with everything else — 3.05 GB while loaded, 0.4 s for 9.5 s of audio.)
+
 ### Looking at what it made
 
 The pinning tools tell the agent to *look at the reference before committing to it*. So they
@@ -357,7 +365,7 @@ download step, and there is no file server to run or misconfigure.
 
 | | |
 |---|---|
-| voice | `create_actor` `import_actor` `actor_tts` `list_actors` `delete_actor` `generate_speech` |
+| voice | `create_actor` `import_actor` `actor_tts` `transcribe` `list_actors` `delete_actor` `generate_speech` |
 | look | `create_character` `create_animal` `create_object` `import_subject` `subject_image` `list_subjects` `delete_subject` `generate_image` |
 | audio | `generate_music` `gen_sfx` |
 | post | `remove_bg` `slice_sheet` |

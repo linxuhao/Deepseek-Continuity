@@ -1,6 +1,6 @@
 [project]
 name = "dsh-continuity"
-version = "0.3.2"
+version = "0.4.0"
 description = "Asset consistency and output verification for agent-generated game media. Local Vulkan backends, zero VRAM when idle."
 readme = "README.md"
 requires-python = ">=3.11"

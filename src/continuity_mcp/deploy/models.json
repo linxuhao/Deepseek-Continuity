@@ -53,6 +53,14 @@
       "dest": "audio/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
       "size_bytes": 2695175104,
       "note": "配音: 照着参考音克隆 —— 音色与台词内容无关, 这是一致性的来源。"
+    },
+    {
+      "group": "audio",
+      "repo_id": "audio-cpp/audio.cpp-gguf",
+      "filename": "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
+      "dest": "audio/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
+      "size_bytes": 2473010048,
+      "note": "听写: 声音 -> 文字。给 import_actor 自动填 transcript, 以及给配音验稿。实测常驻 3.05 GB, 低于生图峰值。"
     }
   ]
 }

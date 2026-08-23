@@ -42,8 +42,8 @@ RAM_FOR_BEST_CUTOUT = 12.0    # remove_bg quality=best 实测峰值 7.74 GB
 # ~/.cache/huggingface, 我们再 copy 到目标目录 —— 同一块盘上同时存在两份。
 # 31 GiB 空闲的机器能过体检, 编完十五分钟镜像, 然后在下载中途 ENOSPC。
 # 现在下载直接写进目标目录 (见 setup_cli.download_models), 没有第二份了。
-DISK_FULL = 30.0
-DISK_AUDIO_ONLY = 20.0
+DISK_FULL = 32.0
+DISK_AUDIO_ONLY = 23.0
 
 
 class PreflightError(RuntimeError):
@@ -290,7 +290,7 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
             f"需要 {VRAM_FOR_IMAGE:.0f} GiB。\n"
             f"          换更小的生图模型省不下这部分 (Q4 与 Q8 峰值相同 6.60 / 6.59), "
             f"降分辨率也不行 —— 瓶颈是那个 8 GiB 不量化的文本编码器。\n"
-            f"          音频那半仍然可以装: 铸声/配音/音乐/音效/抠图都能用, 4 GiB 就够。")
+            f"          音频那半仍然可以装: 铸声/配音/听写/音乐/音效/抠图都能用, 4 GiB 就够。")
     report["enable_image"] = enable_image
     report["enable_audio"] = enable_audio
 
@@ -306,7 +306,7 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
     # 会按含音频权重的 30 GiB 去卡, 而那 7.3 GiB 根本不会下。
     need = 4.0 + (2.11 + 8.47)                       # 余量 + 运行镜像 + 构建中间层
     need += 10.10 if want_image and enable_image else 0.0
-    need += 7.33 if want_audio else 0.0
+    need += 9.63 if want_audio else 0.0               # 含听写的 2.30
     free = free_disk_gib(state_dir)
     report["disk_free_gib"] = free
     report["disk_need_gib"] = need

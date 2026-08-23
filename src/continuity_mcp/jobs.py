@@ -18,7 +18,8 @@ from PIL import Image
 from . import engines, store
 from .errors import Conflict, NotFound, UserError    # noqa: F401  (jobs.UserError 是既有的公开名字)
 from .config import (GENERATED_DIR, MAX_IMAGE_SIZE, SUBJECT_FRAMING, DEFAULT_SUBJECT_KIND,
-                     MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, DEFAULT_VOICE,
+                     MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, ASR_MODEL_ID,
+                     DEFAULT_VOICE,
                      MAX_SPEECH_CHARS, MAX_AUDIO_SECONDS, NAME_RE,
                      REF_MIN_S, REF_MAX_S, MAX_SAMPLE_CHARS)
 from .verify import check_image, check_audio, DegenerateOutput
@@ -351,14 +352,27 @@ def _normalize_ref_wav(src, dst):
     return secs, rate, ch
 
 
-def import_actor(name, audio_path, transcript, force=False):
+def transcribe(audio_path, language=None):
+    """听一段录音。返回 (文字, timing)。
+
+    只收 WAV —— 引擎那边就只支持这一种, 在这里说清楚比让它回一句 HTTP 500 好。
+    """
+    src = Path(audio_path).expanduser()
+    if not src.is_file():
+        raise UserError(f"找不到 {src}")
+    if src.suffix.lower() != ".wav":
+        raise UserError(f"只收 WAV ({src.name} 不是)。先转:\n"
+                        f"  ffmpeg -i {src} -acodec pcm_s16le -ac 1 -ar 24000 out.wav")
+    data = src.read_bytes()
+    return _run(lambda: engines.transcribe(ASR_MODEL_ID, data, src.name, language),
+                needs=ASR_MODEL_ID)
+
+
+def import_actor(name, audio_path, transcript=None, force=False):
     """用一段现成的录音铸声 —— 别处做好的声音也能在这里保持一致。"""
     name = (name or "").strip()
     if not NAME_RE.match(name):
         raise UserError("actor 名只能是字母/数字/下划线/连字符/中文, 1~40 字")
-    if not (transcript or "").strip():
-        raise UserError("必须给 transcript —— 那段录音里念的是什么。克隆模型要拿它对齐"
-                        "音频和文字, 写错了音色会明显不对。")
     src = Path(audio_path).expanduser()
     if not src.is_file():
         raise UserError(f"找不到 {src}")
@@ -382,11 +396,36 @@ def import_actor(name, audio_path, transcript, force=False):
         _commit(tmp, wav, check_audio)
     except DegenerateOutput as e:
         raise UserError(f"这段录音本身不合格: {e}")
+    # transcript 没给就自己听一遍。听的是 wav 而不是 src —— 落盘的这一份才是之后
+    # 克隆真正拿去对齐的音频 (src 可能是 44.1k 立体声, 已经被 _normalize_ref_wav 重采样过)。
+    # 顺序也因此是固定的: 必须在 _commit 之后。
+    heard = False
+    if not (transcript or "").strip():
+        try:
+            transcript, _ = _run(lambda: engines.transcribe(ASR_MODEL_ID, wav.read_bytes(),
+                                                            wav.name),
+                                 needs=ASR_MODEL_ID)
+            heard = True
+        except Exception as e:
+            # 音频已经落盘了 (听写要听的就是落盘的这一份), 而这次导入不会有 meta ——
+            # 留着就是一个谁也认不出来的孤儿 wav。
+            wav.unlink(missing_ok=True)
+            raise UserError(
+                f"没给 transcript, 自动听写也没成 ({str(e).splitlines()[0]})。\n"
+                f"请直接给 transcript —— 那段录音里念的是什么。克隆模型要拿它对齐音频和"
+                f"文字, 这一项缺了或写错, 音色会明显不对。") from e
     meta = store.save_meta(meta_path, {
         "name": name, "voice": f"(导入自 {src.name})", "transcript": transcript.strip(),
+        "transcript_source": "asr" if heard else "given",
         "reference_path": str(wav),
         "imported_from": str(src), "source_format": f"{rate} Hz / {ch} ch / {secs:.1f}s",
         "ref_seconds": round(secs, 1)})
+    if heard:
+        # 不拦, 但一定要说。听错一个词, 克隆就照着错的对齐, 而结果是"音色有点怪"——
+        # 那个症状不会让人想到是这一行文字的问题。
+        meta["heard"] = (
+            f"transcript 是机器听写的: 「{transcript.strip()}」。克隆的对齐依据就是它, "
+            f"听错一个词音色就会不对 —— 用之前核一眼, 不对就重新导入并直接给 transcript。")
     # 升采样补不回丢掉的高频。不拦, 但一定要说 —— 否则就是又一个"导入成功、
     # 音色却比原声闷"的静默降级。
     if rate < REF_RATE:

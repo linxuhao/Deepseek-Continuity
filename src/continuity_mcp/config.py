@@ -43,7 +43,11 @@ AUDIO_SERVER = _env("AUDIO_SERVER", DEFAULT_AUDIO_SERVER)
 MUSIC_MODEL_ID = _env("MUSIC_MODEL_ID", "stable-audio")
 DESIGN_MODEL_ID = _env("DESIGN_MODEL_ID", "qwen3-tts")        # VoiceDesign: 描述 -> 声音
 CLONE_MODEL_ID = _env("CLONE_MODEL_ID", "qwen3-tts-base")     # Base: 参考音 -> 声音
-AUDIO_MODELS = {MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID}
+ASR_MODEL_ID = _env("ASR_MODEL_ID", "qwen3-asr")              # ASR: 声音 -> 文字
+# 进这个集合才受"开工前把不是这件活要用的全卸掉"管 —— 空闲卸载、互斥卸载、退出释放
+# 三件事都是从这里派生的。ASR 实测常驻 3.05 GB, 低于生图的 6.80 GiB 峰值, 所以
+# "峰值 = 单个最大模型"这条不因为多一个模型而变。
+AUDIO_MODELS = {MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, ASR_MODEL_ID}
 
 MAX_IMAGE_SIZE = int(_env("MAX_IMAGE_SIZE", "1024"))
 # 引擎自己在 120s 硬截断: 请求 180/240/300/480 都返回 120001 ms 且不报错。
