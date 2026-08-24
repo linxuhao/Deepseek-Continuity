@@ -304,7 +304,10 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
 
     # 按本机实际要装的那几半算。原先只看 enable_image, 于是 "--audio-server + 本机生图"
     # 会按含音频权重的 34 GiB 去卡, 而那 9.6 GiB 根本不会下。
-    need = 4.0 + (2.11 + 8.47)                       # 余量 + 运行镜像 + 构建中间层
+    # 运行镜像和构建中间层只在本机要装点什么的时候才存在: 两半都 BYO 时不 build
+    # 也不 pull (setup 的 `if any(local.values())`), 那 10.6 GiB 一个字节都不占。
+    # 这条以前看不出来 —— --check 根本不认 BYO, 没人见过"两半都 BYO"的体检。
+    need = 4.0 + ((2.11 + 8.47) if (want_image or want_audio) else 0.0)
     need += 10.10 if want_image and enable_image else 0.0
     need += 9.63 if want_audio else 0.0               # 含听写的 2.30
     free = free_disk_gib(state_dir)

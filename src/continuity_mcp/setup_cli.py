@@ -184,11 +184,18 @@ def wait_healthy(env, profiles, timeout=300):
 def cmd_check(args):
     state_dir = Path(args.state_dir).expanduser()
     image = ENGINES_IMAGE if _image_exists() else None
+    # --check 要和真正安装那条路看到同一件事。原先这里写死 want_audio=True 且不看
+    # 两个 BYO 参数, 于是 `--check --audio-server <url>` 报的是"音频 本机 / 需要
+    # 34 GiB" —— 而真装起来它一个字节都不会下。体检的全部用处就是"先看看会发生
+    # 什么", 它和实际不一致时比没有还坏。
+    byo = {k: v for k, v in (("image", args.sd_server), ("audio", args.audio_server)) if v}
     try:
         r = preflight.run(state_dir, image=image,
-                          want_image=not args.no_image, want_audio=True)
+                          want_image=not args.no_image and not args.sd_server,
+                          want_audio=not args.audio_server)
     except preflight.PreflightError as e:
         die(str(e))
+    r["byo"] = byo
     say(preflight.format_report(r))
     if image is None:
         say("\n  (引擎镜像还没构建, 显卡信息来自主机的 vulkaninfo 或不可用 ——\n"
