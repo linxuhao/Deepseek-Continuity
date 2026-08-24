@@ -38,3 +38,22 @@
           # 参考音时长上限, 秒 (默认 15)。每秒约 0.19 GiB 显存, 不按显存分档 ——
           # 3~10 秒就足够定住音色, 放宽只会让同一段录音在你机器上能导入、别人机器上不能
           CONTINUITY_REF_MAX_S: !!js process.env.CONTINUITY_REF_MAX_S ?? ''
+          # ---- BYO: 把某个能力指到别人家的后端 ----
+          # 这几个必须逐个列在这里。env 是一份显式字典, 没列的键在 MCP server 那边
+          # 根本不存在 —— 于是"我明明设了 CONTINUITY_ASR_SERVER"会静默无效。
+          #
+          # 听写: 任何 OpenAI 形状的 /v1/audio/transcriptions。空 = 跟着 AUDIO_SERVER。
+          # 给根地址, 不带 /v1。
+          ASR_SERVER: !!js process.env.CONTINUITY_ASR_SERVER ?? ''
+          ASR_API_KEY: !!js process.env.CONTINUITY_ASR_API_KEY ?? ''
+          # native (原样发, 默认) | 16000。后端只收 16 kHz 时设后者, 省掉那次
+          # "先按原采样率发一遍、被 400 了再按 16k 重发"的往返。
+          ASR_SEND_RATE: !!js process.env.CONTINUITY_ASR_SEND_RATE ?? ''
+          # 生图: 设了它就走 /v1/images/generations, SD_SERVER 不再被使用。
+          # 这一档省掉 10.1 GiB 权重和 8 GiB 显存门槛, 但 seed 会失效、尺寸被吸附到
+          # 后端的枚举上 —— 每一条都会出现在工具返回的 warnings 里。
+          IMAGE_API_SERVER: !!js process.env.CONTINUITY_IMAGE_API_SERVER ?? ''
+          IMAGE_API_KEY: !!js process.env.CONTINUITY_IMAGE_API_KEY ?? ''
+          IMAGE_API_MODEL: !!js process.env.CONTINUITY_IMAGE_API_MODEL ?? ''
+          # 后端允许的尺寸枚举, 逗号分隔 (默认 1024x1024,1536x1024,1024x1536)
+          IMAGE_API_SIZES: !!js process.env.CONTINUITY_IMAGE_API_SIZES ?? ''

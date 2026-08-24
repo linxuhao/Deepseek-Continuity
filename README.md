@@ -577,8 +577,11 @@ to your engine's config and fetch `Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf`
 `audio-cpp/audio.cpp-gguf`. A local install re-running `continuity-setup` gets both for free.
 Nothing else changes: the other tools do not know the model exists.
 
-Either half also works when set purely at runtime via the two env vars, whether you installed
-from PyPI or wired the dsh plugin — the cordis row passes them straight through.
+Every one of these also works as a plain runtime env var, whether you installed from PyPI or
+wired the dsh plugin. Through the plugin they are named `CONTINUITY_ASR_SERVER`,
+`CONTINUITY_IMAGE_API_SERVER` and so on — `cordis.patch.yml` lists each key explicitly, because
+that env block is a fixed dictionary rather than a passthrough: **a key that is not listed there
+does not exist on the server side**, so setting it has no effect and nothing reports that.
 `continuity_status` names whichever side is unreachable. `gen_sfx` needs no backend at all.
 
 **Be clear about what "your own backend" means here: the same engine, elsewhere.** It is not a

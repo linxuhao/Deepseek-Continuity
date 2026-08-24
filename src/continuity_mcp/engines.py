@@ -33,7 +33,7 @@ import uuid
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
                      AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
                      STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER,
-                     ASR_SERVER, ASR_API_KEY, ASR_IS_REMOTE,
+                     ASR_SERVER, ASR_API_KEY,
                      IMAGE_API_SERVER, IMAGE_API_KEY, IMAGE_API_MODEL, IMAGE_API_SIZES,
                      IMAGE_VIA_API)
 
@@ -213,6 +213,9 @@ def _get_bytes(url, timeout=120):
 
 def _pick_size(width, height):
     """从后端允许的那份枚举里挑长宽比最接近的。返回 (size 字符串, 说明或 None)。"""
+    if not IMAGE_API_SIZES:
+        raise RuntimeError("IMAGE_API_SIZES 配成空的了 —— 至少要给一个 'WxH'。"
+                           "留空的话这里只能抛一句 min() 的 ValueError, 那句话谁也看不懂。")
     want = width / height
     best = min(IMAGE_API_SIZES,
                key=lambda z: abs(int(z.split("x")[0]) / int(z.split("x")[1]) - want))
@@ -509,6 +512,11 @@ def engines_share_a_gpu():
     白付一次重载。实测混合部署 (音频本机核显 / 生图远程独显) 时, 每张图前面都白卸一次。
     同机就当成共用一张卡: 自带的 compose 里两个引擎本来就指向同一个 VULKAN_DEVICE。
     """
+    if IMAGE_VIA_API:
+        # 生图走标准 API 时它根本不在本机跑, 和"生图后端在别的机器上"是同一回事。
+        # 这里必须显式判: SD_SERVER 那时还停在没人用的默认值 127.0.0.1:9020, 按
+        # hostname 比会得出"同机", 于是每出一张图都白卸一次本机的音频模型。
+        return False
     return (urllib.parse.urlparse(SD_SERVER).hostname
             == urllib.parse.urlparse(AUDIO_SERVER).hostname)
 
@@ -519,10 +527,32 @@ def health():
     只返回名字, 不返回长报错: 每条都带一遍"去跑 continuity-setup"的话, 两个引擎
     就是两遍, 而 continuity_status 自己还会再说一遍。提示只该出现一次。"""
     down = []
-    for name, url in (("sd_server", f"{SD_SERVER}/sdcpp/v1/capabilities"),
-                      ("audiocpp_server", f"{AUDIO_SERVER}/health")):
-        try:
-            get(url, timeout=5, tag=name)
-        except Exception:
-            down.append(name)
+    if IMAGE_VIA_API:
+        # 标准 API 没有统一的健康检查端点, 而生成一张图去探活是要花钱的。所以只探
+        # "这个 host 答不答话": 任何 HTTP 应答 (包括 401/404) 都算通, 连不上才算断。
+        if not _answers(f"{IMAGE_API_SERVER}/v1/models"):
+            down.append("image_api")
+    elif not _ok(f"{SD_SERVER}/sdcpp/v1/capabilities", "sd_server"):
+        down.append("sd_server")
+    if not _ok(f"{AUDIO_SERVER}/health", "audiocpp_server"):
+        down.append("audiocpp_server")
     return (not down), down
+
+
+def _ok(url, tag):
+    try:
+        get(url, timeout=5, tag=tag)
+        return True
+    except Exception:
+        return False
+
+
+def _answers(url, timeout=5):
+    """这个地址答不答话 —— HTTPError 也算答话 (401/404 说明服务在)。"""
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=timeout)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False

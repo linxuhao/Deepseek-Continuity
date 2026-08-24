@@ -32,6 +32,7 @@ from . import cutout, engines, errors, jobs, results, sfx, store
 from .config import (GENERATED_DIR, ACTORS_DIR, SUBJECTS_DIR, STATE_DIR, ENABLE_IMAGE,
                      ENABLE_AUDIO, DEFAULT_CUTOUT_QUALITY, RETENTION_DAYS, CLEANUP_INTERVAL_S,
                      MAX_SPEECH_CHARS, AUDIO_IDLE_UNLOAD_S, SD_SERVER, AUDIO_SERVER,
+                     ASR_SERVER, ASR_IS_REMOTE, IMAGE_API_SERVER, IMAGE_VIA_API,
                      INLINE_IMAGES, INLINE_IMAGE_MAX, TRANSPORT, HTTP_HOST, HTTP_PORT, HTTP_PATH)
 
 logging.basicConfig(level=os.getenv("CONTINUITY_LOG_LEVEL", "INFO"), stream=sys.stderr)
@@ -735,9 +736,17 @@ async def continuity_status() -> Annotated[CallToolResult, results.StatusResult]
     """
     ok, down = await asyncio.to_thread(engines.health)
     actors, subjects = store.actor_names(), store.subject_names()
+    # 生图/听写可能指到别人家去了 —— 那时报本机那两个地址是在说另一件事。报的必须是
+    # "这次调用真正会打到哪", 否则排查的人会盯着一个根本没人用的服务看。
+    img_line = (f"  image_api      {IMAGE_API_SERVER}  {'启用 (BYO 标准 API)' if ENABLE_IMAGE else '未启用'}"
+                if IMAGE_VIA_API else
+                f"  sd_server      {SD_SERVER}    {'启用' if ENABLE_IMAGE else '未启用 (显存不足, 只装了音频那半)'}")
+    asr_line = ([f"  asr_server     {ASR_SERVER}  (听写由它提供; 标准 API 没有统一的探活端点)"]
+                if ASR_IS_REMOTE else [])
     lines = [f"引擎: {'全部在线' if ok else '连不上 —— ' + '、'.join(down)}",
-             f"  sd_server      {SD_SERVER}    {'启用' if ENABLE_IMAGE else '未启用 (显存不足, 只装了音频那半)'}",
+             img_line,
              f"  audiocpp_server {AUDIO_SERVER}  {'启用' if ENABLE_AUDIO else '未启用'}",
+             *asr_line,
              f"资产目录: {STATE_DIR}",
              f"  角色 {len(actors)} 个, 定妆 {len(subjects)} 个",
              f"抠图默认档: {DEFAULT_CUTOUT_QUALITY}",
@@ -748,8 +757,10 @@ async def continuity_status() -> Annotated[CallToolResult, results.StatusResult]
         lines.append(engines.SETUP_HINT)
     return _res(results.StatusResult, "\n".join(lines), ok=True,
                 engines_ok=ok, engines_down=down,
-                image=results.EngineInfo(url=SD_SERVER, enabled=ENABLE_IMAGE,
-                                         reachable="sd_server" not in down),
+                image=results.EngineInfo(
+                    url=IMAGE_API_SERVER if IMAGE_VIA_API else SD_SERVER,
+                    enabled=ENABLE_IMAGE,
+                    reachable=("image_api" if IMAGE_VIA_API else "sd_server") not in down),
                 audio=results.EngineInfo(url=AUDIO_SERVER, enabled=ENABLE_AUDIO,
                                          reachable="audiocpp_server" not in down),
                 state_dir=str(STATE_DIR), actors=len(actors), subjects=len(subjects),
