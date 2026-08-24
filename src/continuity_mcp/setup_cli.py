@@ -141,6 +141,9 @@ def write_config(state_dir, models_dir, report, args, byo=None):
         # MCP server 要连的地址: BYO 那半是用户给的, 其余是本机起的
         "SD_SERVER": byo.get("image") or f"http://127.0.0.1:{args.sd_port}",
         "AUDIO_SERVER": byo.get("audio") or f"http://127.0.0.1:{args.audio_port}",
+        # 空字符串 = 跟着 AUDIO_SERVER 走 (config.py 里那个 or)
+        "ASR_SERVER": byo.get("asr") or "",
+        "ASR_API_KEY": args.asr_api_key or "",
         "SD_DIFFUSION_MODEL": "flux-2-klein-4b-Q4_0.gguf",
     }
     (state_dir / "compose.env").write_text(
@@ -188,11 +191,13 @@ def cmd_check(args):
     # 两个 BYO 参数, 于是 `--check --audio-server <url>` 报的是"音频 本机 / 需要
     # 34 GiB" —— 而真装起来它一个字节都不会下。体检的全部用处就是"先看看会发生
     # 什么", 它和实际不一致时比没有还坏。
-    byo = {k: v for k, v in (("image", args.sd_server), ("audio", args.audio_server)) if v}
+    byo = {k: v for k, v in (("image", args.sd_server), ("audio", args.audio_server),
+                             ("asr", args.asr_server)) if v}
     try:
         r = preflight.run(state_dir, image=image,
                           want_image=not args.no_image and not args.sd_server,
-                          want_audio=not args.audio_server)
+                          want_audio=not args.audio_server,
+                          want_asr=not args.asr_server and not args.audio_server)
     except preflight.PreflightError as e:
         die(str(e))
     r["byo"] = byo
@@ -238,8 +243,11 @@ def cmd_install(args):
     state_dir = Path(args.state_dir).expanduser().resolve()
     models_dir = (Path(args.models_dir).expanduser().resolve()
                   if args.models_dir else state_dir / "models")
-    byo = {"image": args.sd_server, "audio": args.audio_server}
-    local = {"image": not byo["image"] and not args.no_image, "audio": not byo["audio"]}
+    byo = {"image": args.sd_server, "audio": args.audio_server, "asr": args.asr_server}
+    local = {"image": not byo["image"] and not args.no_image, "audio": not byo["audio"],
+             # 听写默认跟着音频那半走: 同一个引擎、同一份权重清单。单独给了
+             # --asr-server 才分家, 那时本机连它那 2.3 GiB 都不用下。
+             "asr": not byo["asr"] and not byo["audio"]}
     if not any(local.values()):
         say("    两半都是 BYO —— 本机不装任何引擎, 只写配置。")
 
@@ -272,7 +280,8 @@ def cmd_install(args):
         step(3, total, "探测显卡")
         try:
             report = preflight.run(state_dir, image=ENGINES_IMAGE,
-                                   want_image=local["image"], want_audio=local["audio"])
+                                   want_image=local["image"], want_audio=local["audio"],
+                                   want_asr=local["asr"])
         except preflight.PreflightError as e:
             die(str(e))
         report["byo"] = {k: v for k, v in byo.items() if v}
@@ -400,6 +409,11 @@ def main():
                     help="生图后端你自己提供 —— 本机不装这一半 (权重不下, 引擎不起), 工具照常可用")
     ap.add_argument("--audio-server", metavar="URL",
                     help="音频后端你自己提供 —— 本机不装这一半, 工具照常可用")
+    ap.add_argument("--asr-server", metavar="URL",
+                    help="听写后端你自己提供 (OpenAI 形状的 /v1/audio/transcriptions; "
+                         "给的是根地址, 不带 /v1)。不给就跟着音频后端走")
+    ap.add_argument("--asr-api-key", metavar="KEY",
+                    help="听写后端要鉴权时用 (Authorization: Bearer)")
     ap.add_argument("--skip-build", action="store_true", help="已有引擎镜像就不重编")
     ap.add_argument("--no-cache", action="store_true", help="强制重编引擎镜像")
     ap.add_argument("--sd-port", type=int, default=9020)

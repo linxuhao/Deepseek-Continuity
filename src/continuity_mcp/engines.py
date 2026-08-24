@@ -32,7 +32,8 @@ import uuid
 
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
                      AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
-                     STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER)
+                     STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER,
+                     ASR_SERVER, ASR_API_KEY, ASR_IS_REMOTE)
 
 log = logging.getLogger("continuity")
 
@@ -140,7 +141,7 @@ def post(url, payload, tag, timeout=None, retry_s=None, retry_timeouts=True):
 
 
 def post_multipart(url, fields, file_part, tag, timeout=None, retry_s=None,
-                   retry_timeouts=True):
+                   retry_timeouts=True, api_key=None):
     """multipart/form-data 版的 post。
 
     只有一个端点用它 (/v1/audio/transcriptions), 但那个端点没有别的选择, 见 transcribe()。
@@ -155,8 +156,10 @@ def post_multipart(url, fields, file_part, tag, timeout=None, retry_s=None,
     buf += (f'--{b}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
             f'Content-Type: audio/wav\r\n\r\n').encode()
     buf += data + b"\r\n" + f"--{b}--\r\n".encode()
-    req = urllib.request.Request(url, data=bytes(buf),
-                                 headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+    headers = {"Content-Type": f"multipart/form-data; boundary={b}"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url, data=bytes(buf), headers=headers)
     return _http(req, timeout or JOB_TIMEOUT_S, tag,
                  retry_s=engine_retry_budget() if retry_s is None else retry_s,
                  retry_timeouts=retry_timeouts)
@@ -362,12 +365,16 @@ def transcribe(model_id, audio_bytes, filename="audio.wav", language=None,
     实测 (Qwen3-ASR 1.7B Q8_0, RX 7800 XT, 9.5 s 参考音): 冷启 3.9 s (其中加载约 2.4 s),
     热调 0.4 s, RTF 0.042。
     """
-    release_all_but(model_id)
+    # 后端在别的机器上时不碰本机显存 —— 那里没有这个模型, 卸本机的模型不省任何东西。
+    if not ASR_IS_REMOTE:
+        release_all_but(model_id)
     fields = {"model": model_id}
     if language:
         fields["language"] = language
-    res = post_multipart(f"{AUDIO_SERVER}/v1/audio/transcriptions", fields,
-                         ("file", filename, audio_bytes), tag)
+    res = post_multipart(f"{ASR_SERVER}/v1/audio/transcriptions", fields,
+                         ("file", filename, audio_bytes),
+                         "asr_server" if ASR_IS_REMOTE else tag,
+                         api_key=ASR_API_KEY or None)
     text = (res.get("text") or "").strip()
     if not text:
         # 空转写不当成"成功但没内容": 调用它的两处 (transcribe 工具、import_actor 自动

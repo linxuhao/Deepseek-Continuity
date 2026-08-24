@@ -55,7 +55,7 @@
       "note": "配音: 照着参考音克隆 —— 音色与台词内容无关, 这是一致性的来源。"
     },
     {
-      "group": "audio",
+      "group": "asr",
       "repo_id": "audio-cpp/audio.cpp-gguf",
       "filename": "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
       "dest": "audio/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",

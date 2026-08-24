@@ -32,7 +32,7 @@ VRAM_FOR_IMAGE = 8.0
 VRAM_FOR_AUDIO = 4.0          # 单个音频模型实测峰值 3.62 GiB
 RAM_FOR_BEST_CUTOUT = 12.0    # remove_bg quality=best 实测峰值 7.74 GB
 # 磁盘按"装的过程中"算, 不是按"装完之后" —— 峰值出现在编译还没被回收的时候, 实测:
-#   权重  生图 10.10 + 音频 9.63 GiB
+#   权重  生图 10.10 + 音频 7.33 + 听写 2.30 GiB
 #   运行镜像               2.11 GiB
 #   构建中间层 (可回收)     8.47 GiB   <- 装完可以 docker builder prune 掉
 # 全装峰值 ~30 GiB, 回收后 ~21.8 GiB; 只装音频峰值 ~20 GiB, 回收后 ~11.7 GiB。
@@ -242,8 +242,14 @@ def free_disk_gib(path):
 
 # ---- 汇总 ----
 
-def run(state_dir, image=None, want_image=True, want_audio=True):
-    """跑全部体检, 返回一份计划。硬门槛不过就抛 PreflightError。"""
+def run(state_dir, image=None, want_image=True, want_audio=True, want_asr=None):
+    """跑全部体检, 返回一份计划。硬门槛不过就抛 PreflightError。
+
+    want_asr 默认跟着 want_audio —— 听写和配音本来就是同一个引擎里的两个模型,
+    只有单独指了 --asr-server 才分家。
+    """
+    if want_asr is None:
+        want_asr = want_audio
     report = {"docker": check_docker()}
 
     devices, source, mode = vulkan_devices(image)
@@ -293,6 +299,7 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
             f"          音频那半仍然可以装: 铸声/配音/听写/音乐/音效/抠图都能用, 4 GiB 就够。")
     report["enable_image"] = enable_image
     report["enable_audio"] = enable_audio
+    report["enable_asr"] = want_asr
 
     ram = total_ram_gib()
     report["ram_gib"] = ram
@@ -309,7 +316,8 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
     # 这条以前看不出来 —— --check 根本不认 BYO, 没人见过"两半都 BYO"的体检。
     need = 4.0 + ((2.11 + 8.47) if (want_image or want_audio) else 0.0)
     need += 10.10 if want_image and enable_image else 0.0
-    need += 9.63 if want_audio else 0.0               # 含听写的 2.30
+    need += 7.33 if want_audio else 0.0
+    need += 2.30 if want_asr else 0.0                # 听写的权重单独一组
     free = free_disk_gib(state_dir)
     report["disk_free_gib"] = free
     report["disk_need_gib"] = need
@@ -346,6 +354,15 @@ def format_report(r):
     if r.get("image_warning"):
         out.append(f"          {r['image_warning']}")
     out.append(f"  音频    {cap('audio', '本机', '未启用')}")
+    # 听写默认是音频那半里的一个模型, 只有单独指了 --asr-server 才是自己一档。
+    # 音频 BYO 而听写没单独指时, 它由那台机器提供 —— 这种情况说"未启用"是错的。
+    if byo.get("asr"):
+        asr = f"BYO -> {byo['asr']}"
+    elif byo.get("audio"):
+        asr = f"跟随音频 (BYO -> {byo['audio']})"
+    else:
+        asr = "本机" if r.get("enable_asr") else "未启用"
+    out.append(f"  听写    {asr}")
     out.append(f"  抠图默认档  {r['cutout_quality']}")
     if r.get("cutout_reason"):
         out.append(f"          {r['cutout_reason']}")

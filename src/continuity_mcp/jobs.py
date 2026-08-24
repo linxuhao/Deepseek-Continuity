@@ -5,6 +5,7 @@
 # 8 GB 的卡装得下整套, 靠的就是"同一时刻只有一件事在跑"。并发会把这个前提取消掉。
 # ==========================================
 import base64
+import io
 import logging
 import os
 import threading
@@ -19,7 +20,7 @@ from . import engines, store
 from .errors import Conflict, NotFound, UserError    # noqa: F401  (jobs.UserError 是既有的公开名字)
 from .config import (GENERATED_DIR, MAX_IMAGE_SIZE, SUBJECT_FRAMING, DEFAULT_SUBJECT_KIND,
                      MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, ASR_MODEL_ID,
-                     DEFAULT_VOICE,
+                     ASR_IS_REMOTE, DEFAULT_VOICE,
                      MAX_SPEECH_CHARS, MAX_AUDIO_SECONDS, NAME_RE,
                      REF_MIN_S, REF_MAX_S, MAX_SAMPLE_CHARS)
 from .verify import check_image, check_audio, DegenerateOutput
@@ -352,6 +353,52 @@ def _normalize_ref_wav(src, dst):
     return secs, rate, ch
 
 
+ASR_RATE = 16000            # 听写的输入规格
+
+
+def _asr_wav(data):
+    """任意 16-bit PCM WAV -> 16 kHz 单声道。
+
+    ASR 模型内部一律在 16 kHz 上算, 所以这次重采样不损失任何识别信息, 而放在发送端
+    做有两个实打实的好处:
+      - 参考音是 24 kHz 的 (克隆要的规格), 而不是每个后端都收。实测 vLLM 的
+        /v1/audio/transcriptions 对 22.05k 和 24k 一律 400 "Invalid or unsupported
+        audio file" —— 报错里一个字都不提采样率, 换成 16k 立刻就过。
+      - 字节少三分之一。后端在别的机器上 (ASR_SERVER) 时这不是白省的。
+    """
+    import wave as _wave
+    with _wave.open(io.BytesIO(data)) as w:
+        ch, width, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+        raw = w.readframes(n)
+    if width != 2:
+        raise UserError(f"只收 16-bit PCM WAV (这个是 {width * 8}-bit)。先转:\n"
+                        f"  ffmpeg -i 原文件 -acodec pcm_s16le -ac 1 -ar {ASR_RATE} out.wav")
+    x = np.frombuffer(raw, dtype="<i2").astype(np.float32)
+    if ch > 1:
+        x = x.reshape(-1, ch).mean(axis=1)
+    if rate != ASR_RATE:
+        m = int(round(x.size * ASR_RATE / rate))
+        x = np.interp(np.linspace(0, x.size - 1, m), np.arange(x.size), x)
+    pcm = np.clip(np.round(x), -32768, 32767).astype("<i2")
+    buf = io.BytesIO()
+    with _wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(ASR_RATE)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+def _hear(data, filename, language=None):
+    """听一段音频。后端在别处时不进串行锁 —— 它不用本机那张卡, 排在本机任务后面
+    没有道理, 而 _run 的整套显存腾挪对它也全是空转。"""
+    wav = _asr_wav(data)
+    if ASR_IS_REMOTE:
+        return engines.transcribe(ASR_MODEL_ID, wav, filename, language)
+    return _run(lambda: engines.transcribe(ASR_MODEL_ID, wav, filename, language),
+                needs=ASR_MODEL_ID)
+
+
 def transcribe(audio_path, language=None):
     """听一段录音。返回 (文字, timing)。
 
@@ -362,10 +409,8 @@ def transcribe(audio_path, language=None):
         raise UserError(f"找不到 {src}")
     if src.suffix.lower() != ".wav":
         raise UserError(f"只收 WAV ({src.name} 不是)。先转:\n"
-                        f"  ffmpeg -i {src} -acodec pcm_s16le -ac 1 -ar 24000 out.wav")
-    data = src.read_bytes()
-    return _run(lambda: engines.transcribe(ASR_MODEL_ID, data, src.name, language),
-                needs=ASR_MODEL_ID)
+                        f"  ffmpeg -i {src} -acodec pcm_s16le -ac 1 -ar {ASR_RATE} out.wav")
+    return _hear(src.read_bytes(), src.name, language)
 
 
 def import_actor(name, audio_path, transcript=None, force=False):
@@ -402,9 +447,7 @@ def import_actor(name, audio_path, transcript=None, force=False):
     heard = False
     if not (transcript or "").strip():
         try:
-            transcript, _ = _run(lambda: engines.transcribe(ASR_MODEL_ID, wav.read_bytes(),
-                                                            wav.name),
-                                 needs=ASR_MODEL_ID)
+            transcript, _ = _hear(wav.read_bytes(), wav.name)
             heard = True
         except Exception as e:
             # 音频已经落盘了 (听写要听的就是落盘的这一份), 而这次导入不会有 meta ——

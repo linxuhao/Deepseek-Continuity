@@ -40,6 +40,29 @@ DEFAULT_AUDIO_SERVER = "http://127.0.0.1:9021"
 SD_SERVER = _env("SD_SERVER", DEFAULT_SD_SERVER)
 AUDIO_SERVER = _env("AUDIO_SERVER", DEFAULT_AUDIO_SERVER)
 
+# 听写单独一个后端地址, 默认跟着 AUDIO_SERVER 走 —— 不设它, 一切和以前一样。
+#
+# 为什么只有听写有这一档: 它的端点是 OpenAI 那套 (multipart file + model, 回 {"text"}),
+# 于是"别人家的 ASR"是真实存在的东西 —— vLLM、任何 OpenAI 兼容的服务、别人的机器。
+# 配音和音乐没有这个待遇: /v1/audio/speech 收的是 voice_ref 内联 base64 + reference_text,
+# 音乐走的是 /v1/tasks/run, 两个都是 audio.cpp 自己的形状, 没有第三方讲这套话。
+# 它们的"BYO"只能是"另一台 audiocpp_server", 而那正是 AUDIO_SERVER 已经在做的事。
+ASR_SERVER = _env("ASR_SERVER", "") or AUDIO_SERVER
+ASR_API_KEY = _env("ASR_API_KEY", "")
+
+
+# 听写是不是由"我们自己那个 audiocpp_server"提供的。
+#
+# 判据是同不同一个**引擎**, 不是同不同一台机器 —— 一开始我按 hostname 比, 于是
+# 把 ASR_SERVER 指到同机另一个端口 (127.0.0.1:9000 的 vLLM) 被判成"本机的",
+# 而那个进程的模型表里根本没有 qwen3-asr。同机不同进程也是别人家的引擎。
+#
+# 不是自己那个引擎时:
+#   - 它不进 AUDIO_MODELS (否则每次配音都要为一个本机引擎没有的模型发一次卸载)
+#   - 听写开工前也不卸本机的模型 (那台/那个进程的显存不归我们管, 卸了不省任何东西,
+#     只让下一次配音白付一次重载 —— 和 engines_share_a_gpu() 对生图的判断同一个理由)
+ASR_IS_REMOTE = ASR_SERVER.rstrip("/") != AUDIO_SERVER.rstrip("/")
+
 MUSIC_MODEL_ID = _env("MUSIC_MODEL_ID", "stable-audio")
 DESIGN_MODEL_ID = _env("DESIGN_MODEL_ID", "qwen3-tts")        # VoiceDesign: 描述 -> 声音
 CLONE_MODEL_ID = _env("CLONE_MODEL_ID", "qwen3-tts-base")     # Base: 参考音 -> 声音
@@ -47,7 +70,8 @@ ASR_MODEL_ID = _env("ASR_MODEL_ID", "qwen3-asr")              # ASR: 声音 -> �
 # 进这个集合才受"开工前把不是这件活要用的全卸掉"管 —— 空闲卸载、互斥卸载、退出释放
 # 三件事都是从这里派生的。ASR 实测常驻 3.05 GB, 低于生图的 6.80 GiB 峰值, 所以
 # "峰值 = 单个最大模型"这条不因为多一个模型而变。
-AUDIO_MODELS = {MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, ASR_MODEL_ID}
+AUDIO_MODELS = ({MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID}
+                | (set() if ASR_IS_REMOTE else {ASR_MODEL_ID}))
 
 MAX_IMAGE_SIZE = int(_env("MAX_IMAGE_SIZE", "1024"))
 # 引擎自己在 120s 硬截断: 请求 180/240/300/480 都返回 120001 ms 且不报错。

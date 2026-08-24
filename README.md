@@ -507,6 +507,21 @@ other local**:
 |---|---|---|
 | image | `SD_SERVER` | a **stable-diffusion.cpp `sd-server`** (`/sdcpp/v1/img_gen` + poll, accepts `ref_images`) |
 | audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/tasks/run`, `/v1/tasks/unload_models`) serving `qwen3-tts` / `qwen3-tts-base` / `stable-audio` / `qwen3-asr` |
+| asr | `ASR_SERVER` + `ASR_API_KEY` | **anything OpenAI-shaped**: multipart `file` + `model` on `/v1/audio/transcriptions`, returning `{"text": ...}`. Defaults to `AUDIO_SERVER`. Give the **root** URL, no `/v1` — the path is appended. |
+
+Only ASR gets its own row, and the reason is the endpoint, not the model: transcription is the
+one capability with an industry-standard shape, so *someone else's* ASR is a real thing you can
+point at — vLLM, a hosted API, another box. Speech and music have no such option: cloning posts
+`voice_ref` as inline base64 with a `reference_text` alongside it, and music goes through
+`/v1/tasks/run` — both are audio.cpp's own shapes, which no third party speaks. Their "BYO" can
+only ever mean *another `audiocpp_server`*, and that is what `AUDIO_SERVER` already is.
+
+Audio is resampled to **16 kHz mono** before it is sent, for every backend. ASR models all run
+at 16 kHz internally, so nothing is lost — but not every server will do the conversion for you.
+vLLM's `/v1/audio/transcriptions` rejects 22.05 kHz and 24 kHz outright with `400 Invalid or
+unsupported audio file`, and says nothing about sample rates; reference audio here is 24 kHz
+because that is what the cloning model wants, so without this step the two would never have met.
+It also cuts the upload by a third, which stops being free once the backend is a network away.
 
 Tell the installer which half is yours and it skips that half entirely — no weights, no engine,
 no VRAM gate — while the tools stay registered:
@@ -514,6 +529,8 @@ no VRAM gate — while the tools stay registered:
 ```bash
 continuity-setup --sd-server http://your-box:9020      # 生图你自己供; 本地只装音频
 continuity-setup --audio-server http://your-box:9021   # 反过来
+continuity-setup --asr-server http://your-box:9000 \
+                 --asr-api-key sk-...                  # 只把听写挪出去, 那 2.3 GiB 不下
 ```
 
 That matters more than it sounds: without it, BYO-ing the image half still downloaded **10.1 GiB**
