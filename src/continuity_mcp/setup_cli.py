@@ -107,7 +107,7 @@ def download_models(models_dir, groups):
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             # local_dir: 直接下到目标目录, 不经过 ~/.cache/huggingface。
-            # 原先是"下到缓存再 copy 一份", 同一块盘上同时存在两份 —— 17.4 GiB 的
+            # 原先是"下到缓存再 copy 一份", 同一块盘上同时存在两份 —— 19.7 GiB 的
             # 安装实际要 35 GiB, 而体检只按一份算, 于是空间刚够的机器会在编完镜像、
             # 下到一半时 ENOSPC。而且那次 copy 在 try 之外, 报出来是条裸 traceback。
             got = hf_hub_download(repo_id=m["repo_id"], filename=m["filename"],

@@ -107,7 +107,7 @@ Two details in there that exist because the naive version is wrong:
 |---|---|---|
 | **GPU** | **8 GiB VRAM** | Peak is 6.80 GiB (measured). Requests are serialized, so peak is one model, not the sum. |
 | **GPU API** | **Vulkan 1.2+** | **No CUDA, no ROCm.** Kernels are SPIR-V compiled at runtime. |
-| **Disk** | **34 GiB during install**, 21.8 GiB after | 19.7 weights + 2.1 runtime image + 8.5 build layers (reclaimable). |
+| **Disk** | **34 GiB during install**, 21.8 GiB after | 19.7 weights + 2.1 runtime image + 8.5 build layers (reclaimable) + 4 headroom. |
 | **Host RAM** | **16 GiB** (8 GiB workable — see below) | Driven by transient peaks, not idle. |
 | **CPU** | any x86-64 | Background removal runs on CPU. |
 
@@ -359,7 +359,7 @@ because a diffusion model is the wrong instrument for a 40 ms coin pickup.
 
 ## Tools
 
-19 tools. Everything returns **absolute local file paths**, not URLs — the agent and the
+21 tools. Everything returns **absolute local file paths**, not URLs — the agent and the
 engines are on the same machine, so a path can go straight into your game project without a
 download step, and there is no file server to run or misconfigure.
 
@@ -506,7 +506,7 @@ other local**:
 | | env var | what it must be |
 |---|---|---|
 | image | `SD_SERVER` | a **stable-diffusion.cpp `sd-server`** (`/sdcpp/v1/img_gen` + poll, accepts `ref_images`) |
-| audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/tasks/run`, `/v1/tasks/unload_models`) |
+| audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/tasks/run`, `/v1/tasks/unload_models`) serving `qwen3-tts` / `qwen3-tts-base` / `stable-audio` / `qwen3-asr` |
 
 Tell the installer which half is yours and it skips that half entirely — no weights, no engine,
 no VRAM gate — while the tools stay registered:
@@ -523,6 +523,13 @@ turns "生图 显存不足" into "生图(BYO)" and downloads nothing.
 
 Note the deliberate split from `--no-image`: that one means *"I don't want this capability"*
 (tools unregistered); `--sd-server` means *"I supply this capability"* (tools work normally).
+
+**Upgrading a BYO audio engine to 0.4.0:** the ASR model is new, and BYO means the installer
+never touches your engine — so `transcribe` (and `import_actor` without a transcript) will fail
+against an engine that predates it. Add the `qwen3-asr` entry from `deploy/audio_server.json.tmpl`
+to your engine's config and fetch `Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf` (2.3 GiB) from
+`audio-cpp/audio.cpp-gguf`. A local install re-running `continuity-setup` gets both for free.
+Nothing else changes: the other tools do not know the model exists.
 
 Either half also works when set purely at runtime via the two env vars, whether you installed
 from PyPI or wired the dsh plugin — the cordis row passes them straight through.

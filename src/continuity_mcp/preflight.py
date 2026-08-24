@@ -32,18 +32,18 @@ VRAM_FOR_IMAGE = 8.0
 VRAM_FOR_AUDIO = 4.0          # 单个音频模型实测峰值 3.62 GiB
 RAM_FOR_BEST_CUTOUT = 12.0    # remove_bg quality=best 实测峰值 7.74 GB
 # 磁盘按"装的过程中"算, 不是按"装完之后" —— 峰值出现在编译还没被回收的时候, 实测:
-#   权重  生图 10.10 + 音频 7.33 GiB
+#   权重  生图 10.10 + 音频 9.63 GiB
 #   运行镜像               2.11 GiB
 #   构建中间层 (可回收)     8.47 GiB   <- 装完可以 docker builder prune 掉
-# 全装峰值 ~28 GiB, 回收后 ~19.5 GiB; 只装音频峰值 ~18 GiB, 回收后 ~9.5 GiB。
+# 全装峰值 ~30 GiB, 回收后 ~21.8 GiB; 只装音频峰值 ~20 GiB, 回收后 ~11.7 GiB。
 # 卡在峰值上而不是终值上: 下到一半没空间比一开始就被拒绝糟糕得多。
 #
 # 这两个数字曾经少算了一整份权重: hf_hub_download 不带 local_dir 时先把文件落进
 # ~/.cache/huggingface, 我们再 copy 到目标目录 —— 同一块盘上同时存在两份。
 # 31 GiB 空闲的机器能过体检, 编完十五分钟镜像, 然后在下载中途 ENOSPC。
 # 现在下载直接写进目标目录 (见 setup_cli.download_models), 没有第二份了。
-DISK_FULL = 32.0
-DISK_AUDIO_ONLY = 23.0
+DISK_FULL = 34.0
+DISK_AUDIO_ONLY = 24.0
 
 
 class PreflightError(RuntimeError):
@@ -303,7 +303,7 @@ def run(state_dir, image=None, want_image=True, want_audio=True):
             f"(峰值 1.33 GB, 而 best 是 7.74 GB)。单次调用仍可传 quality='best' 覆盖。")
 
     # 按本机实际要装的那几半算。原先只看 enable_image, 于是 "--audio-server + 本机生图"
-    # 会按含音频权重的 30 GiB 去卡, 而那 7.3 GiB 根本不会下。
+    # 会按含音频权重的 34 GiB 去卡, 而那 9.6 GiB 根本不会下。
     need = 4.0 + (2.11 + 8.47)                       # 余量 + 运行镜像 + 构建中间层
     need += 10.10 if want_image and enable_image else 0.0
     need += 9.63 if want_audio else 0.0               # 含听写的 2.30
