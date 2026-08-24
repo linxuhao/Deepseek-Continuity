@@ -113,18 +113,18 @@ def generate_image(prompt, width=1024, height=1024, seed=None, ref_b64=None,
                    steps=None, cfg_scale=1.0):
     want_w, want_h, w, h = _clamp_size(width, height)
     def work():
-        data, ext = engines.sd_generate(prompt, w, h, steps, cfg_scale, seed, ref_b64)
+        data, ext, notes = engines.draw(prompt, w, h, steps, cfg_scale, seed, ref_b64)
         name = _new_name("img", ext)
         _out(name).write_bytes(data)
         _fit_size(_out(name), want_w, want_h)
         check_image(_out(name))
-        return name
-    name = _run(work, needs=None)
+        return name, notes
+    name, notes = _run(work, needs=None)
     clamped = {"width": want_w, "height": want_h} if (want_w, want_h) != (width, height) else None
     # 落盘的图已经被 _fit_size 修到 want_w x want_h, 所以这两个数就是文件的真实尺寸。
     # 回报出去是因为结构化那份要给程序看 —— "被限制到多少"以前只写在人话里。
     return {"file": name, "path": str(_out(name)), "width": want_w, "height": want_h,
-            "clamped": clamped}
+            "clamped": clamped, "notes": notes}
 
 
 def subject_image(subject, scene, width=512, height=512, seed=None,
@@ -159,7 +159,7 @@ def create_subject(name, appearance, kind=DEFAULT_SUBJECT_KIND, width=512, heigh
 
     def work():
         t = time.time()
-        data, _ = engines.sd_generate(f"{appearance}, {SUBJECT_FRAMING[kind]}", w, h,
+        data, _, notes = engines.draw(f"{appearance}, {SUBJECT_FRAMING[kind]}", w, h,
                                       steps=steps, cfg_scale=cfg_scale, seed=seed)
         tmp = png.with_suffix(".png.new")
         tmp.write_bytes(data)
@@ -167,6 +167,7 @@ def create_subject(name, appearance, kind=DEFAULT_SUBJECT_KIND, width=512, heigh
         _commit(tmp, png, check_image)
         meta = store.save_meta(meta_path, {"name": name, "kind": kind, "appearance": appearance,
                                            "reference_path": str(png), "seed": seed})
+        meta["notes"] = notes
         log.info("[subject] 定妆 %s (%s) 完成 (%.1fs)", name, kind, time.time() - t)
         return meta
     return _run(work, needs=None)

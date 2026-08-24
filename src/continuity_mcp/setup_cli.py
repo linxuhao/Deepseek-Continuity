@@ -144,6 +144,10 @@ def write_config(state_dir, models_dir, report, args, byo=None):
         # 空字符串 = 跟着 AUDIO_SERVER 走 (config.py 里那个 or)
         "ASR_SERVER": byo.get("asr") or "",
         "ASR_API_KEY": args.asr_api_key or "",
+        # 生图走标准 API 时这个非空 —— config.IMAGE_VIA_API 就是看它
+        "IMAGE_API_SERVER": args.image_api_server or "",
+        "IMAGE_API_KEY": args.image_api_key or "",
+        "IMAGE_API_MODEL": args.image_api_model or "",
         "SD_DIFFUSION_MODEL": "flux-2-klein-4b-Q4_0.gguf",
     }
     (state_dir / "compose.env").write_text(
@@ -191,11 +195,13 @@ def cmd_check(args):
     # 两个 BYO 参数, 于是 `--check --audio-server <url>` 报的是"音频 本机 / 需要
     # 34 GiB" —— 而真装起来它一个字节都不会下。体检的全部用处就是"先看看会发生
     # 什么", 它和实际不一致时比没有还坏。
-    byo = {k: v for k, v in (("image", args.sd_server), ("audio", args.audio_server),
+    byo = {k: v for k, v in (("image", args.sd_server or args.image_api_server),
+                             ("audio", args.audio_server),
                              ("asr", args.asr_server)) if v}
     try:
         r = preflight.run(state_dir, image=image,
-                          want_image=not args.no_image and not args.sd_server,
+                          want_image=(not args.no_image and not args.sd_server
+                                      and not args.image_api_server),
                           want_audio=not args.audio_server,
                           want_asr=not args.asr_server and not args.audio_server)
     except preflight.PreflightError as e:
@@ -243,7 +249,10 @@ def cmd_install(args):
     state_dir = Path(args.state_dir).expanduser().resolve()
     models_dir = (Path(args.models_dir).expanduser().resolve()
                   if args.models_dir else state_dir / "models")
-    byo = {"image": args.sd_server, "audio": args.audio_server, "asr": args.asr_server}
+    # 生图那半"不由本机提供"有两种形态: 别人的 sd-server, 或者一个标准 API。
+    # 对装机来说它们是同一件事 (权重不下、引擎不起、显存门槛不适用), 所以合成一个。
+    byo = {"image": args.sd_server or args.image_api_server,
+           "audio": args.audio_server, "asr": args.asr_server}
     local = {"image": not byo["image"] and not args.no_image, "audio": not byo["audio"],
              # 听写默认跟着音频那半走: 同一个引擎、同一份权重清单。单独给了
              # --asr-server 才分家, 那时本机连它那 2.3 GiB 都不用下。
@@ -409,6 +418,12 @@ def main():
                     help="生图后端你自己提供 —— 本机不装这一半 (权重不下, 引擎不起), 工具照常可用")
     ap.add_argument("--audio-server", metavar="URL",
                     help="音频后端你自己提供 —— 本机不装这一半, 工具照常可用")
+    ap.add_argument("--image-api-server", metavar="URL",
+                    help="生图接别人家的标准 API (OpenAI 形状的 /v1/images/generations; "
+                         "给根地址, 不带 /v1)。本机不装生图那半 —— 10.1 GiB 权重不下, "
+                         "8 GiB 显存门槛也不适用")
+    ap.add_argument("--image-api-key", metavar="KEY", help="生图 API 的鉴权 key")
+    ap.add_argument("--image-api-model", metavar="NAME", help="生图 API 的模型名")
     ap.add_argument("--asr-server", metavar="URL",
                     help="听写后端你自己提供 (OpenAI 形状的 /v1/audio/transcriptions; "
                          "给的是根地址, 不带 /v1)。不给就跟着音频后端走")

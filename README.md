@@ -508,6 +508,26 @@ other local**:
 | image | `SD_SERVER` | a **stable-diffusion.cpp `sd-server`** (`/sdcpp/v1/img_gen` + poll, accepts `ref_images`) |
 | audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/tasks/run`, `/v1/tasks/unload_models`) serving `qwen3-tts` / `qwen3-tts-base` / `stable-audio` / `qwen3-asr` |
 | asr | `ASR_SERVER` + `ASR_API_KEY` | **anything OpenAI-shaped**: multipart `file` + `model` on `/v1/audio/transcriptions`, returning `{"text": ...}`. Defaults to `AUDIO_SERVER`. Give the **root** URL, no `/v1` — the path is appended. |
+| image via API | `IMAGE_API_SERVER` + `IMAGE_API_KEY` | **anything OpenAI-shaped**: `/v1/images/generations`, plus `/v1/images/edits` when a reference image is involved; either `b64_json` or `url` in the response is accepted. Setting it wins over `SD_SERVER` — unlike the ASR knob it *selects a protocol*, not just an address, because our own engine speaks sd.cpp's `/sdcpp/v1/img_gen` and nothing else does. |
+
+Pointing image generation at a hosted API is the biggest saving on offer — 10.1 GiB of weights
+and the whole 8 GiB VRAM gate — but it is the capability that loses the most in translation, and
+every loss is reported in the tool's own `warnings` rather than left for you to discover:
+
+- **`seed` does not exist** in the standard shape. It is dropped, and the result reports
+  `seed: null` rather than echoing back a number that reproduces nothing.
+- **Sizes are a fixed enum**, and which one differs by provider (`IMAGE_API_SIZES`). The
+  request is snapped to the nearest *aspect*; `generate_image` then resizes down to what you
+  asked for, while a pinned subject's reference image is stored at the provider's size.
+- **`steps` / `cfg_scale` have nowhere to go.**
+- **Reference images go through `/v1/images/edits`**, where providers differ the most — mask
+  editing, multi-image reference, style transfer are all spelled this way. Identity pinning
+  therefore becomes a property of that backend rather than something this package delivers.
+
+> **Tested against shape, not against a provider.** This path was built against the documented
+> OpenAI shape and exercised end-to-end on a local mock (both `b64_json` and `url` responses,
+> generations and edits, key header, `seed` correctly absent from the wire). No live hosted
+> service was called. Try `generate_image` once before trusting a new backend with a pinning run.
 
 Only ASR gets its own row, and the reason is the endpoint, not the model: transcription is the
 one capability with an industry-standard shape, so *someone else's* ASR is a real thing you can
@@ -538,6 +558,8 @@ continuity-setup --sd-server http://your-box:9020      # 生图你自己供; 本
 continuity-setup --audio-server http://your-box:9021   # 反过来
 continuity-setup --asr-server http://your-box:9000 \
                  --asr-api-key sk-...                  # 只把听写挪出去, 那 2.3 GiB 不下
+continuity-setup --image-api-server https://api.openai.com \
+                 --image-api-key sk-...                # 生图整半交给标准 API, 10.1 GiB 不下
 ```
 
 That matters more than it sounds: without it, BYO-ing the image half still downloaded **10.1 GiB**

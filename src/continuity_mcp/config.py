@@ -74,6 +74,23 @@ ASR_SEND_RATE = _env("ASR_SEND_RATE", "native").strip().lower()
 #     只让下一次配音白付一次重载 —— 和 engines_share_a_gpu() 对生图的判断同一个理由)
 ASR_IS_REMOTE = ASR_SERVER.rstrip("/") != AUDIO_SERVER.rstrip("/")
 
+# 生图接别人家的标准 API。设了它就走那条路, SD_SERVER 一眼都不看。
+#
+# 这里和听写那边形状不同, 是故意的: 听写两边说的是同一套端点
+# (/v1/audio/transcriptions), 所以一个 ASR_SERVER 就够, 地址不同即"别人家的"。
+# 生图不是 —— 我们自己的引擎说的是 sd.cpp 的 /sdcpp/v1/img_gen + 轮询, 标准 API 说的是
+# /v1/images/generations, 两套协议。所以这个变量的职责是**选协议**, 不只是给地址,
+# 那它就必须是单独一个, 不能靠"和 SD_SERVER 不一样"推出来。
+IMAGE_API_SERVER = _env("IMAGE_API_SERVER", "")
+IMAGE_API_KEY = _env("IMAGE_API_KEY", "")
+IMAGE_API_MODEL = _env("IMAGE_API_MODEL", "gpt-image-1")
+# 标准 API 的尺寸是一份固定枚举, 各家不同, 所以是配置不是常量。
+# 请求的尺寸会被换成这里面**长宽比最接近**的那一个, 落盘前再由 _fit_size 修回你要的
+# 尺寸 (那个函数本来就在干这件事: 引擎也会把请求吸附到自己的网格上)。
+IMAGE_API_SIZES = [x.strip() for x in
+                   _env("IMAGE_API_SIZES", "1024x1024,1536x1024,1024x1536").split(",") if x.strip()]
+IMAGE_VIA_API = bool(IMAGE_API_SERVER)
+
 MUSIC_MODEL_ID = _env("MUSIC_MODEL_ID", "stable-audio")
 DESIGN_MODEL_ID = _env("DESIGN_MODEL_ID", "qwen3-tts")        # VoiceDesign: 描述 -> 声音
 CLONE_MODEL_ID = _env("CLONE_MODEL_ID", "qwen3-tts-base")     # Base: 参考音 -> 声音

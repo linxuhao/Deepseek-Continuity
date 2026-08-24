@@ -33,7 +33,9 @@ import uuid
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
                      AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
                      STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER,
-                     ASR_SERVER, ASR_API_KEY, ASR_IS_REMOTE)
+                     ASR_SERVER, ASR_API_KEY, ASR_IS_REMOTE,
+                     IMAGE_API_SERVER, IMAGE_API_KEY, IMAGE_API_MODEL, IMAGE_API_SIZES,
+                     IMAGE_VIA_API)
 
 log = logging.getLogger("continuity")
 
@@ -132,9 +134,12 @@ def engine_retry_budget():
     return ENGINE_WAIT_S if setup_was_run() else 0.0
 
 
-def post(url, payload, tag, timeout=None, retry_s=None, retry_timeouts=True):
+def post(url, payload, tag, timeout=None, retry_s=None, retry_timeouts=True, api_key=None):
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url, data=body, headers=headers)
     return _http(req, timeout or JOB_TIMEOUT_S, tag,
                  retry_s=engine_retry_budget() if retry_s is None else retry_s,
                  retry_timeouts=retry_timeouts)
@@ -148,13 +153,13 @@ def post_multipart(url, fields, file_part, tag, timeout=None, retry_s=None,
     自己拼而不引 requests: 全包到这里为止没有任何第三方 HTTP 依赖, 为一个 form 破例
     不值当 —— 这段拼接是死的, 二十行, 没有需要维护的分支。
     """
-    name, filename, data = file_part
+    name, filename, data, ctype = file_part
     b = uuid.uuid4().hex
     buf = bytearray()
     for k, v in fields.items():
         buf += (f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n').encode()
     buf += (f'--{b}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
-            f'Content-Type: audio/wav\r\n\r\n').encode()
+            f'Content-Type: {ctype}\r\n\r\n').encode()
     buf += data + b"\r\n" + f"--{b}--\r\n".encode()
     headers = {"Content-Type": f"multipart/form-data; boundary={b}"}
     if api_key:
@@ -198,6 +203,86 @@ def sd_generate(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b6
         raise RuntimeError("sd_server returned no images")
     return (base64.b64decode(imgs[0]["b64_json"]),
             st["result"].get("output_format") or "png")
+
+
+def _get_bytes(url, timeout=120):
+    """把一个 URL 的内容取回来 (标准 API 可能回 url 而不是 b64)。"""
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read()
+
+
+def _pick_size(width, height):
+    """从后端允许的那份枚举里挑长宽比最接近的。返回 (size 字符串, 说明或 None)。"""
+    want = width / height
+    best = min(IMAGE_API_SIZES,
+               key=lambda z: abs(int(z.split("x")[0]) / int(z.split("x")[1]) - want))
+    if best == f"{width}x{height}":
+        return best, None
+    # 措辞不能写成"落盘前会缩回你要的尺寸": 那只对 generate_image 成立 (它有 _fit_size),
+    # 定妆图存的就是这里挑出来的尺寸。第一版写成了前者, 而定妆那条路上它是句假话。
+    return best, (f"标准生图 API 的尺寸是固定枚举, {width}x{height} 被换成长宽比最接近的 "
+                  f"{best} —— 长宽比对不上时会有形变。generate_image 落盘前会缩回你要的"
+                  f"尺寸, 定妆图存的就是 {best}。后端支持别的尺寸就改 IMAGE_API_SIZES。")
+
+
+def image_api(prompt, width, height, seed=None, ref_b64=None):
+    """别人家的 /v1/images/generations —— OpenAI 那套形状。返回 (bytes, ext, notes)。
+
+    ⚠️ 这条路是对着标准的**形状**写的, 在一个本地 mock 上打通过, 但没有对任何一家真实
+    服务实测过。各家在参考图上的语义差得最远 (见下), 换后端时先拿 generate_image
+    试一张再说。
+
+    notes 里的每一条都是"你要的东西这里给不了"。它们会一路走到工具返回的 warnings ——
+    这条路能用, 但不能假装它和本机引擎是同一个东西:
+      - seed 没有对应参数, 所以"同 seed 可复现"在这条路上不成立;
+      - steps / cfg_scale 无处可放, 丢掉;
+      - 尺寸被吸附到后端的枚举上。
+    """
+    notes = []
+    size, note = _pick_size(width, height)
+    if note:
+        notes.append(note)
+    if seed is not None:
+        notes.append("标准生图 API 没有 seed 参数, 这次的 seed 被忽略了 —— "
+                     "同 seed 复现同一张图在这条路上不成立。要可复现就用本机引擎。")
+    if ref_b64:
+        # 参考图走 edits: 各家对它的理解差得最远 (蒙版编辑 / 多图参考 / 风格迁移),
+        # 所以定妆一致性在这条路上是后端的性质, 不是我们的保证。
+        notes.append("参考图走的是标准 API 的 edits 端点, 各家语义不同 —— "
+                     "定妆的一致性在这条路上由那个后端决定, 不由这里保证。")
+        res = post_multipart(f"{IMAGE_API_SERVER}/v1/images/edits",
+                             {"model": IMAGE_API_MODEL, "prompt": prompt, "size": size, "n": "1"},
+                             ("image", "reference.png", base64.b64decode(ref_b64), "image/png"),
+                             "image_api", api_key=IMAGE_API_KEY or None)
+    else:
+        res = post(f"{IMAGE_API_SERVER}/v1/images/generations",
+                   {"model": IMAGE_API_MODEL, "prompt": prompt, "size": size, "n": 1},
+                   "image_api", api_key=IMAGE_API_KEY or None)
+    items = res.get("data") or []
+    if not items:
+        raise RuntimeError(f"image_api 没返回图片: {str(res)[:300]}")
+    first = items[0]
+    if first.get("b64_json"):
+        data = base64.b64decode(first["b64_json"])
+    elif first.get("url"):
+        # 不强制 response_format=b64_json: 有的实现认这个参数, 有的认了会报未知参数,
+        # 而两种回法我们都收得下, 那就没必要为它挑一边。
+        data = _get_bytes(first["url"])
+    else:
+        raise RuntimeError(f"image_api 的返回里既没有 b64_json 也没有 url: {str(first)[:200]}")
+    ext = "png" if data[:4] == b"\x89PNG" else ("jpg" if data[:2] == b"\xff\xd8" else "png")
+    return data, ext, notes
+
+
+def draw(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b64=None):
+    """出一张图 —— 自己的引擎还是别人家的 API, 由 IMAGE_API_SERVER 决定。
+
+    返回 (bytes, ext, notes)。notes 只有 API 那条路才会非空。
+    """
+    if IMAGE_VIA_API:
+        return image_api(prompt, width, height, seed, ref_b64)
+    data, ext = sd_generate(prompt, width, height, steps, cfg_scale, seed, ref_b64)
+    return data, ext, []
 
 
 # ---- 音频显存生命周期 ----
@@ -393,7 +478,7 @@ def transcribe(model_id, audio_bytes, filename="audio.wav", language=None,
     if language:
         fields["language"] = language
     res = post_multipart(f"{AUDIO_SERVER}/v1/audio/transcriptions", fields,
-                         ("file", filename, audio_bytes), tag)
+                         ("file", filename, audio_bytes, "audio/wav"), tag)
     return _text_of(res, model_id)
 
 
@@ -411,7 +496,7 @@ def transcribe_api(model_id, audio_bytes, filename="audio.wav", language=None):
     if language:
         fields["language"] = language
     res = post_multipart(f"{ASR_SERVER}/v1/audio/transcriptions", fields,
-                         ("file", filename, audio_bytes), "asr_server",
+                         ("file", filename, audio_bytes, "audio/wav"), "asr_server",
                          api_key=ASR_API_KEY or None)
     return _text_of(res, model_id)
 

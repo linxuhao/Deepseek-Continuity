@@ -342,11 +342,14 @@ if ENABLE_IMAGE:
                           steps, cfg)
         except Exception as e:
             return _fail(results.SubjectResult, "定妆失败", e)
+        notes = m.get("notes") or []
         return _res(results.SubjectResult,
                     f"{label} '{m['name']}' 已定妆。\n定妆图: {m['reference_path']}\n"
-                    f"先看一眼确认是不是你要的, 不满意用 force=true 重定。",
+                    + "".join(f"⚠️ {n}\n" for n in notes)
+                    + f"先看一眼确认是不是你要的, 不满意用 force=true 重定。",
                     _image=m["reference_path"],
-                    ok=True, name=m["name"], kind=m["kind"], appearance=m["appearance"],
+                    ok=True, warnings=notes, name=m["name"], kind=m["kind"],
+                    appearance=m["appearance"],
                     reference_path=m["reference_path"], seed=m.get("seed"))
 
     # 这四个工具回的是 [文字, 定妆图] 两块内容, 所以不能标 `-> str` —— mcp 2.0 会按返回
@@ -557,10 +560,19 @@ if ENABLE_IMAGE:
         except Exception as e:
             return _fail(results.ImageResult, "图片生成失败", e)
         tail = f" (尺寸被限制到 {r['clamped']['width']}x{r['clamped']['height']})" if r["clamped"] else ""
+        # notes 是"你要的东西这条路给不了"(走 IMAGE_API_SERVER 时才有)。它必须走 warnings,
+        # 不能只留在日志里 —— seed 被忽略而调用方以为它生效, 下一次"同 seed 再来一张"
+        # 拿到的是另一张图, 而中间没有任何一层说过话。
+        notes = r.get("notes") or []
         return _res(results.ImageResult,
                     f"图片已生成: {r['path']}{tail}\n"
-                    f"提示: 这张图里的东西不会在下一次调用中重现。角色/物件请用定妆流程。",
-                    ok=True, path=r["path"], width=r["width"], height=r["height"], seed=seed,
+                    + "".join(f"⚠️ {n}\n" for n in notes)
+                    + f"提示: 这张图里的东西不会在下一次调用中重现。角色/物件请用定妆流程。",
+                    # seed 被忽略时结构化那份也得是 None —— 回报一个没生效的 seed,
+                    # 等于给调用方一个假的复现凭据。
+                    ok=True, warnings=notes, path=r["path"], width=r["width"],
+                    height=r["height"],
+                    seed=(None if any("seed" in n for n in notes) else seed),
                     clamped=bool(r["clamped"]))
 
 
