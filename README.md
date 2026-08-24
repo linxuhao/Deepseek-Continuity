@@ -516,12 +516,19 @@ point at — vLLM, a hosted API, another box. Speech and music have no such opti
 `/v1/tasks/run` — both are audio.cpp's own shapes, which no third party speaks. Their "BYO" can
 only ever mean *another `audiocpp_server`*, and that is what `AUDIO_SERVER` already is.
 
-Audio is resampled to **16 kHz mono** before it is sent, for every backend. ASR models all run
-at 16 kHz internally, so nothing is lost — but not every server will do the conversion for you.
-vLLM's `/v1/audio/transcriptions` rejects 22.05 kHz and 24 kHz outright with `400 Invalid or
-unsupported audio file`, and says nothing about sample rates; reference audio here is 24 kHz
-because that is what the cloning model wants, so without this step the two would never have met.
-It also cuts the upload by a third, which stops being free once the backend is a network away.
+**The two paths do not share assumptions, and the code keeps them apart.** For our own engine we
+picked the model, so we know it runs at 16 kHz and we downsample to it — nothing is lost, the
+upload shrinks by a third, and the local VRAM dance applies. For a backend we did not pick we
+know none of that, so the audio goes **as-is**: deciding whether to resample is that service's
+business, and pre-downsampling for one whose model wants wideband audio throws away the very
+thing it was trained on.
+
+That leaves the servers which are themselves picky. vLLM's `/v1/audio/transcriptions` rejects
+22.05 kHz and 24 kHz with `400 Invalid or unsupported audio file` and says nothing about sample
+rates — and reference audio here is 24 kHz, because that is what the *cloning* model wants. So a
+`400` on the standard path is retried once at 16 kHz (a `400` means the request was refused, and
+the audio is the only thing we can vary). Set `ASR_SEND_RATE=16000` for a backend known to be in
+this camp and skip the wasted round trip.
 
 Tell the installer which half is yours and it skips that half entirely — no weights, no engine,
 no VRAM gate — while the tools stay registered:

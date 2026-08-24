@@ -20,7 +20,7 @@ from . import engines, store
 from .errors import Conflict, NotFound, UserError    # noqa: F401  (jobs.UserError 是既有的公开名字)
 from .config import (GENERATED_DIR, MAX_IMAGE_SIZE, SUBJECT_FRAMING, DEFAULT_SUBJECT_KIND,
                      MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID, ASR_MODEL_ID,
-                     ASR_IS_REMOTE, DEFAULT_VOICE,
+                     ASR_IS_REMOTE, ASR_SEND_RATE, DEFAULT_VOICE,
                      MAX_SPEECH_CHARS, MAX_AUDIO_SECONDS, NAME_RE,
                      REF_MIN_S, REF_MAX_S, MAX_SAMPLE_CHARS)
 from .verify import check_image, check_audio, DegenerateOutput
@@ -389,14 +389,37 @@ def _asr_wav(data):
     return buf.getvalue()
 
 
+def _wav_rate(data):
+    import wave as _wave
+    try:
+        with _wave.open(io.BytesIO(data)) as w:
+            return w.getframerate()
+    except Exception:
+        return None
+
+
 def _hear(data, filename, language=None):
-    """听一段音频。后端在别处时不进串行锁 —— 它不用本机那张卡, 排在本机任务后面
-    没有道理, 而 _run 的整套显存腾挪对它也全是空转。"""
-    wav = _asr_wav(data)
-    if ASR_IS_REMOTE:
-        return engines.transcribe(ASR_MODEL_ID, wav, filename, language)
-    return _run(lambda: engines.transcribe(ASR_MODEL_ID, wav, filename, language),
-                needs=ASR_MODEL_ID)
+    """听一段音频。自己的引擎和别人家的 API 是两条路, 假设不一样。"""
+    if not ASR_IS_REMOTE:
+        # 自己那个引擎: 模型是我们选的, 就在 16 kHz 上算, 转过去不丢信息还省三分之一
+        # 的字节。串行锁和显存腾挪也只有这一路需要。
+        return _run(lambda: engines.transcribe(ASR_MODEL_ID, _asr_wav(data), filename, language),
+                    needs=ASR_MODEL_ID)
+
+    # 别人家的 API: 原样发, 不进串行锁 —— 它不用本机那张卡, 排在本机任务后面没有道理。
+    if ASR_SEND_RATE == "16000":
+        data = _asr_wav(data)
+    try:
+        return engines.transcribe_api(ASR_MODEL_ID, data, filename, language)
+    except engines.EngineError as e:
+        # 400 = "这个请求我不接受", 而我们唯一能变的就是音频。实测挑食的那些挑的正是
+        # 采样率 (vLLM 对 22.05k/24k 一律 400 且只字不提), 所以按 16 kHz 再试一次。
+        # 已经是 16k 就没什么可试的了, 原样抛出去。
+        if "HTTP 4" not in str(e) or _wav_rate(data) == ASR_RATE:
+            raise
+        log.info("[asr] 后端拒了这段音频, 按 16 kHz 重发一次 (%s)",
+                 str(e).splitlines()[0][:120])
+        return engines.transcribe_api(ASR_MODEL_ID, _asr_wav(data), filename, language)
 
 
 def transcribe(audio_path, language=None):

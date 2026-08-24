@@ -352,9 +352,32 @@ def tts(model_id, text, voice_ref_b64=None, reference_text=None, instructions=No
     return base64.b64decode(b64), res.get("timing") or {}
 
 
+# ---- 听写 ----
+#
+# 两条路, 故意分开写:
+#
+#   transcribe()      我们自己那个 audiocpp_server。它的模型是我们选的 (Qwen3-ASR,
+#                     16 kHz), 显存也归我们管, 所以该卸的卸、该降采样的降采样。
+#   transcribe_api()  别人家的 OpenAI 形状端点。我们对它一无所知 —— 什么模型、
+#                     内部多少赫兹、要不要鉴权, 全是它自己的事。所以这一路只做三件
+#                     必须做的: 按标准形状发、带上 key、把 {"text"} 取出来。
+#
+# 合成一个函数会逼出一堆 "if 是不是自己的引擎" 的分支, 而这两件事本来就不共享假设。
+
+
+def _text_of(res, who):
+    text = (res.get("text") or "").strip()
+    if not text:
+        # 空转写不当成"成功但没内容": 调用它的两处 (transcribe 工具、import_actor 自动
+        # 听写) 拿到空字符串都没法往下走, 而静默的空串会一路变成一个 transcript 为空
+        # 的角色 —— 那正是克隆对不齐的起点。
+        raise RuntimeError(f"{who} 听不出内容 (是不是静音或纯噪声?): {str(res)[:200]}")
+    return text, res.get("timing") or {}
+
+
 def transcribe(model_id, audio_bytes, filename="audio.wav", language=None,
                tag="audiocpp_server"):
-    """把一段录音听成文字。
+    """自己那个引擎。音频已经是 16 kHz 单声道 —— 它的模型就在那个采样率上算。
 
     走 multipart 而不是 JSON, 和 tts() 走 /v1/audio/speech 是同一件事: 这个端点的
     JSON 形式三个字段 (audio / audio_path / file) 收的都是**引擎本机的路径**, 而引擎
@@ -365,23 +388,32 @@ def transcribe(model_id, audio_bytes, filename="audio.wav", language=None,
     实测 (Qwen3-ASR 1.7B Q8_0, RX 7800 XT, 9.5 s 参考音): 冷启 3.9 s (其中加载约 2.4 s),
     热调 0.4 s, RTF 0.042。
     """
-    # 后端在别的机器上时不碰本机显存 —— 那里没有这个模型, 卸本机的模型不省任何东西。
-    if not ASR_IS_REMOTE:
-        release_all_but(model_id)
+    release_all_but(model_id)
+    fields = {"model": model_id}
+    if language:
+        fields["language"] = language
+    res = post_multipart(f"{AUDIO_SERVER}/v1/audio/transcriptions", fields,
+                         ("file", filename, audio_bytes), tag)
+    return _text_of(res, model_id)
+
+
+def transcribe_api(model_id, audio_bytes, filename="audio.wav", language=None):
+    """别人家的 /v1/audio/transcriptions —— OpenAI 那套形状。
+
+    这里不碰本机显存: 那边的模型不在我们的卡上, 卸本机的模型不省任何东西, 只让下一次
+    配音白付一次重载 (和 engines_share_a_gpu() 对生图的判断同一个理由)。
+
+    音频原样发。该不该降采样是那个后端的事 —— 我们连它跑的是什么模型都不知道,
+    而替一个吃 48 kHz 的服务先降到 16 kHz 是在丢它要用的信息。挑食的后端由调用方
+    按 400 重试一次 (见 jobs._hear)。
+    """
     fields = {"model": model_id}
     if language:
         fields["language"] = language
     res = post_multipart(f"{ASR_SERVER}/v1/audio/transcriptions", fields,
-                         ("file", filename, audio_bytes),
-                         "asr_server" if ASR_IS_REMOTE else tag,
+                         ("file", filename, audio_bytes), "asr_server",
                          api_key=ASR_API_KEY or None)
-    text = (res.get("text") or "").strip()
-    if not text:
-        # 空转写不当成"成功但没内容": 调用它的两处 (transcribe 工具、import_actor 自动
-        # 听写) 拿到空字符串都没法往下走, 而静默的空串会一路变成一个 transcript 为空
-        # 的角色 —— 那正是克隆对不齐的起点。
-        raise RuntimeError(f"{model_id} 听不出内容 (是不是静音或纯噪声?): {str(res)[:200]}")
-    return text, res.get("timing") or {}
+    return _text_of(res, model_id)
 
 
 def engines_share_a_gpu():

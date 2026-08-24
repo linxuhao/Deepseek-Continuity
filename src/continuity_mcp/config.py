@@ -50,6 +50,17 @@ AUDIO_SERVER = _env("AUDIO_SERVER", DEFAULT_AUDIO_SERVER)
 ASR_SERVER = _env("ASR_SERVER", "") or AUDIO_SERVER
 ASR_API_KEY = _env("ASR_API_KEY", "")
 
+# 发给别人家 API 的采样率: native (原样发) | 16000。
+#
+# 默认 native, 因为"该不该降采样"是后端的事, 不是我们的事。Whisper 那一系确实在
+# 16 kHz 上算, 但不是所有服务都是 —— 一些厂商的模型吃到 48 kHz 并明确建议发原生音频,
+# 替他们降一道是在丢他们要用的信息。我们知道的只有自己那个引擎的模型。
+#
+# 而有的 OpenAI 兼容服务反过来只收 16 kHz (实测 vLLM 对 22.05k/24k 一律 400
+# "Invalid or unsupported audio file", 只字不提采样率)。所以标准那条路遇到 400 会
+# 自动按 16 kHz 重发一次; 后端确定是这一类时把这个设成 16000, 省掉那次白跑的往返。
+ASR_SEND_RATE = _env("ASR_SEND_RATE", "native").strip().lower()
+
 
 # 听写是不是由"我们自己那个 audiocpp_server"提供的。
 #
