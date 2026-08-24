@@ -33,6 +33,10 @@
           AUDIO_SERVER: !!js process.env.CONTINUITY_AUDIO_SERVER ?? ''
           # 显存不够装生图时 setup 会让你设 0, 那样只有音频那半的工具会注册
           CONTINUITY_ENABLE_IMAGE: !!js process.env.CONTINUITY_ENABLE_IMAGE ?? ''
+          # 反过来那半的开关。MCP server 一直读它 (config.ENABLE_AUDIO), 只是这里从
+          # 一开始就漏了列 —— 于是"只要生图、不要音频"这件事通过插件是做不到的:
+          # 设了没反应, 而没有任何一层会说它没生效。
+          CONTINUITY_ENABLE_AUDIO: !!js process.env.CONTINUITY_ENABLE_AUDIO ?? ''
           # best (~7.7 GiB 内存峰值) / fast (~1.3 GiB); setup 按本机内存推荐
           CONTINUITY_CUTOUT_QUALITY: !!js process.env.CONTINUITY_CUTOUT_QUALITY ?? ''
           # 参考音时长上限, 秒 (默认 15)。每秒约 0.19 GiB 显存, 不按显存分档 ——
