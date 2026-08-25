@@ -1,12 +1,12 @@
 [project]
 name = "dsh-continuity"
-version = "0.5.1"
-description = "Asset consistency and output verification for agent-generated game media. Local Vulkan backends, zero VRAM when idle."
+version = "0.5.2"
+description = "Asset consistency and output verification for agent-generated game media: image, voice, music and SFX from local Vulkan backends with zero VRAM when idle, or from any OpenAI-shaped image/ASR API instead."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Xuhao Lin" }]
-keywords = ["mcp", "dsh-plugin", "deepseek-harness", "game-assets", "tts", "image-generation"]
+keywords = ["mcp", "dsh-plugin", "deepseek-harness", "game-assets", "tts", "image-generation", "sound-effects", "music-generation", "openai-compatible"]
 dependencies = [
   "mcp>=2.0",
   "numpy",

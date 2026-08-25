@@ -9,9 +9,65 @@ Runs locally. Models are lazy-loaded per request and released when idle, so **wh
 not using it the GPU is untouched** — 0.21 GiB resident, measured. You can play a game on
 the same card.
 
+Or keep only the half you want local: image generation speaks any OpenAI-shaped `/v1/images/*`
+API and transcription any OpenAI-shaped `/v1/audio/transcriptions`, and telling `continuity-setup`
+so means that half's engine and weights are never downloaded — the 8 GiB VRAM gate leaves with the
+image half. See [Bring your own backend](#bring-your-own-backend-optional).
+
 > 场记 is the continuity supervisor on a film set. Their entire job is two things: make sure
 > the costume, hair and props match between takes, and catch the mistake on set before it is
 > cut into the film. That is exactly this plugin's job.
+
+## What it looks like
+
+One `create_character` call fixed this face. Everything after it is a single `subject_image`
+call carrying nothing but a scene — no reference image passed by hand, no re-describing the
+character, no retouching. These are the files the tools returned.
+
+<table>
+<tr>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-00-reference.jpg" width="100%" alt="the create_character reference image"><br><sub><code>create_character</code> — the reference every later call is held against</sub></td>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-01-lantern-closeup.jpg" width="100%" alt="“close-up portrait, lit from below by a lantern”"><br><sub>“close-up portrait, lit from below by a lantern”</sub></td>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-02-cliff-profile.jpg" width="100%" alt="“strict side profile, on a cliff edge at dusk”"><br><sub>“strict side profile, on a cliff edge at dusk”</sub></td>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-03-snow-behind.jpg" width="100%" alt="“from behind, looking back over her shoulder, snow”"><br><sub>“from behind, looking back over her shoulder, snow”</sub></td>
+</tr>
+<tr>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-04-campfire.jpg" width="100%" alt="“sitting by a campfire, cleaning her gauntlet, low angle”"><br><sub>“sitting by a campfire, cleaning her gauntlet, low angle”</sub></td>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-05-red-armour.jpg" width="100%" alt="“wearing heavy red lacquered plate armour”"><br><sub>“wearing heavy red lacquered plate armour”</sub></td>
+<td width="25%"><img src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-06-woodcut.jpg" width="100%" alt="“as a stark black and white woodcut print”"><br><sub>“as a stark black and white woodcut print”</sub></td>
+</tr>
+</table>
+
+The blind right eye, the scar through the brow, the bone pendant and the brass gauntlet come
+through all seven. That is the entire point: the same description through `generate_image`
+gives you a different woman every time, which is how a game ends up with three protagonists.
+
+Two things it did **not** do, kept here because a demo that only shows the wins teaches you
+nothing about the tool:
+
+- **Style requests only partly take.** The woodcut landed. "Pixel-art sprite" was asked for
+  twice and ignored both times — the reference image dominates the style of the output, which
+  is exactly the mechanism that makes the face hold.
+- **The armour is layered, not swapped.** The face and the gauntlet held, but the red plate
+  went on *over* the grey coat instead of replacing it.
+
+### The same for voices
+
+`create_actor` once, then one `actor_tts` call per line. Each line comes back as its own
+24 kHz mono WAV; they are joined here into one clip because GitHub will not play a `.wav`
+inline.
+
+<video src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-voice.mp4" controls width="100%"></video>
+
+> 别碰那扇门。上一个碰它的人，我埋在山下第三棵松树底下。
+>
+> 我这只眼睛看不见，可另一只看得比你清楚。
+>
+> 拿上灯，跟紧我。这条路我走过十七次，没有哪一次是一样的。
+
+Three different lines, three different lengths, one voice. Through `generate_speech` — the
+same voice description, no actor — those three lines are three different people; the
+measurement behind that claim is in [Two things it actually does](#two-things-it-actually-does).
 
 ## Install
 
@@ -112,6 +168,11 @@ Two details in there that exist because the naive version is wrong:
 | **CPU** | any x86-64 | Background removal runs on CPU. |
 
 Audio-only installs (see below) need **20 GiB during install, 9.5 GiB after**.
+
+Every row above is about the halves you run **locally**. `--image-api-server` (or `--sd-server`)
+drops the GPU row to the 4 GiB the audio half needs and leaves 10.1 GiB of weights undownloaded,
+`--asr-server` another 2.3 GiB, and `--audio-server` the rest — see
+[Bring your own backend](#bring-your-own-backend-optional).
 
 All VRAM/RAM figures on this page are **GiB** (2³⁰ bytes), which is what `rocm-smi` and
 `vulkaninfo` report. An earlier version of this README labelled them GB; that was wrong and
