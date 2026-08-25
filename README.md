@@ -1,9 +1,9 @@
 # 场记 / Continuity
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that gives an
-agent local image / speech / music / SFX generation **and remembers what it made** — the same
-character stays the same character across every call, and a failed generation is never allowed
-to pass as a success.
+agent local image / speech / music / SFX generation, the transcription to hear its own output
+back, **and a memory of what it made** — the same character stays the same character across
+every call, and a failed generation is never allowed to pass as a success.
 
 Runs locally. Models are lazy-loaded per request and released when idle, so **when you are
 not using it the GPU is untouched** — 0.21 GiB resident, measured. You can play a game on
@@ -71,6 +71,32 @@ README, so the picture above is a still and the link opens GitHub's own player.
 Three different lines, three different lengths, one voice. Through `generate_speech` — the
 same voice description, no actor — those three lines are three different people; the
 measurement behind that claim is in [Two things it actually does](#two-things-it-actually-does).
+
+## What it can do
+
+| | tools | |
+|---|---|---|
+| **Look** | `create_character` `create_animal` `create_object` `import_subject` `subject_image` | pin a character, animal or prop once; every later image is that one |
+| **Voice** | `create_actor` `import_actor` `actor_tts` | cast a voice once; every later line is that voice |
+| **Hearing** | `transcribe` | read a WAV back as text — including one this plugin just made |
+| **Music** | `generate_music` | Stable Audio, up to 120 s, no loop points — score a scene, not a BGM loop |
+| **SFX** | `gen_sfx` `sfx_presets` | procedural sfxr: milliseconds, byte-identical for a given seed, no model and no VRAM at all |
+| **One-offs** | `generate_image` `generate_speech` | for things that never recur; their own descriptions say so and point back at the pinning tools |
+| **Post** | `remove_bg` `slice_sheet` | real RGBA cutout (CPU), and a grid sheet cut into single frames |
+| **State** | `continuity_status` | which engines are up, which capabilities are on, where the assets live |
+
+Two of these read *in* rather than write out, and they are the ones people miss:
+
+- **`import_actor` / `import_subject`** pin something you already have — a real actor's
+  recording, a character sheet drawn elsewhere — and everything downstream is identical to a
+  natively cast one (measured: an imported actor tracks a native one to 11 Hz).
+- **`transcribe`** closes the loop. A cloned line that swallowed its last two words sounds
+  completely normal; it is only visible once you read it back and compare it to the script.
+  That is also what fills in an imported recording's transcript when you don't have one (the
+  ASR model loads on demand and unloads with the rest — 3.05 GB while resident, 0.4 s for
+  9.5 s of audio).
+
+The table above is the short version — all 21 tools, grouped, are in [Tools](#tools).
 
 ## Install
 
