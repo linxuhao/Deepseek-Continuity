@@ -57,7 +57,10 @@ nothing about the tool:
 24 kHz mono WAV; they are joined here into one clip because GitHub will not play a `.wav`
 inline.
 
-<video src="https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-voice.mp4" controls width="100%"></video>
+[![Kestrel — three lines, one voice](https://raw.githubusercontent.com/linxuhao/Deepseek-Continuity/main/assets/kestrel-voice-poster.jpg)](https://github.com/linxuhao/Deepseek-Continuity/blob/main/assets/kestrel-voice.mp4)
+
+▶ [**Play the 19-second clip**](https://github.com/linxuhao/Deepseek-Continuity/blob/main/assets/kestrel-voice.mp4) — GitHub strips `<video>` out of a
+README, so the picture above is a still and the link opens GitHub's own player.
 
 > 别碰那扇门。上一个碰它的人，我埋在山下第三棵松树底下。
 >
