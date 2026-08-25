@@ -35,6 +35,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/continuity_mcp"]
 
+# README 里的示例图/试听 mp4 只服务 GitHub 页面 (引用的是绝对 raw 链接),
+# 装包的人不需要它们 —— 不排除的话 sdist 会从 100 KB 涨到 800 KB。
+[tool.hatch.build.targets.sdist]
+exclude = ["assets"]
+
 # deploy/ (compose / Dockerfile / 权重清单) 就在包目录里, hatchling 会连非 .py 文件
 # 一起打进去 —— 不需要 force-include, 加了反而会把同一个文件塞两次,
 # 构建直接失败。editable 装看不出来 (它不打包), 只有真正 pip install 才炸。
