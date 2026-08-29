@@ -29,7 +29,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 固定到实测跑通的提交。浮动到 master 意味着某天的上游改动会静默改变本机行为,
 # 而这套东西的全部价值就是"跨次调用不变"。
 ARG SDCPP_REF=97d2990
-ARG AUDIOCPP_REF=aec444c
+# audio.cpp d2ff370 = tag v0.7.0 (2026-08-26)。从 aec444c 上来 452 个提交,
+# 换的是两件已经在咬人的事:
+#   - #298 给 LoadedModel::unload() 补上 loaded.store(false)。在那之前,
+#     /v1/tasks/unload_models (我们卸显存走的那条) 卸完 /v1/models 仍报
+#     loaded=true —— 实测卸后进程只剩 4 MiB, 标志位却不动。只有被
+#     --ui-management 门控的那条 UI 路径会清它, 而我们没开那个开关。
+#   - #306 的 --idle-unload-ms: 引擎自己按空闲时间卸, 判据是 session 是否
+#     真在, 不看标志位。这补上了本项目空闲计时器够不着的那半 —— 它按自己的
+#     last_use 判, 于是任何不经过本进程的加载, 启动那次幂等卸载之后就再也
+#     看不见了 (实测: 带外加载后等 150s, 显存纹丝不动)。
+ARG AUDIOCPP_REF=d2ff370
 
 WORKDIR /src
 RUN git clone --recursive https://github.com/leejet/stable-diffusion.cpp.git \
