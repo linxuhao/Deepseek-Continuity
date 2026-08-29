@@ -328,15 +328,23 @@ Measured on an RX 7800 XT with nothing else on the card:
 | 120 s after TTS | **0.21 GiB** |
 
 Images are free: the engine streams weights per request and never keeps them resident.
-Audio is released by an idle timer (`AUDIO_IDLE_UNLOAD_S`, default 120 s) — not immediately,
-because someone voicing ten lines in a row should not pay a reload each time. Reload costs
-nothing measurable: the same TTS request took 3.0 s both cold and warm, because weights are
-mmap'd and sit in page cache.
+Audio is released by an idle timer — not immediately, because someone voicing ten lines in a
+row should not pay a reload each time. Reload costs nothing measurable: the same TTS request
+took 3.0 s both cold and warm, because weights are mmap'd and sit in page cache.
+
+**The idle timer lives in the engine, not here** (`idle_unload_ms` in `audio_server.json`,
+default 120 000 ms). It used to be a thread in this process, and that version had a hole worth
+naming: it timed from *its own* last job, so any model loaded by anyone else — another client
+talking to the engine directly, or a previous process of this server that was `SIGKILL`ed —
+was invisible to it forever. Measured: load a model by calling the engine directly, leave this
+server running, wait past the timeout, and the VRAM does not move. The engine's timer keys on
+whether a session is actually resident, so it does not care who loaded the model.
 
 Requests are serialized and everything unneeded is released first, so peak = the single largest
-model, always. The idle timer covers the one case the rule cannot: after the *last* job there is
-no next job to trigger a release, so the timer does it. Closing the agent releases the VRAM too —
-the MCP server unloads on exit rather than leaving the engines holding it.
+model, always. The idle timer covers the one case that rule cannot: after the *last* job there is
+no next job to trigger a release. Closing the agent releases the VRAM immediately — this server
+still unloads on exit, because the timer only guarantees *eventually* and someone quitting to go
+play a game should not wait two minutes for their card.
 
 ## Two things it actually does
 
@@ -585,8 +593,8 @@ reachable. Port 9030 stays clear of the two engines (9020 / 9021).
 The VRAM guarantee is unchanged over HTTP: image generation and TTS still share one process-wide
 lock, so several clients connecting at once means they queue, not that two models sit on the card
 together. What HTTP *does* change is the shutdown ladder above — a long-lived server is not being
-reaped by dsh, so the models stay loaded until `AUDIO_IDLE_UNLOAD_S` (default 120 s idle) frees
-them, or until you stop the process.
+reaped by dsh, so the models stay loaded until the engine's own `idle_unload_ms` (default
+120 000 ms idle) frees them, or until you stop the process.
 
 ## Bring your own backend (optional)
 

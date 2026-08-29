@@ -31,7 +31,7 @@ from PIL import Image as PILImage
 from . import cutout, engines, errors, jobs, results, sfx, store
 from .config import (GENERATED_DIR, ACTORS_DIR, SUBJECTS_DIR, STATE_DIR, ENABLE_IMAGE,
                      ENABLE_AUDIO, DEFAULT_CUTOUT_QUALITY, RETENTION_DAYS, CLEANUP_INTERVAL_S,
-                     MAX_SPEECH_CHARS, AUDIO_IDLE_UNLOAD_S, SD_SERVER, AUDIO_SERVER,
+                     MAX_SPEECH_CHARS, SD_SERVER, AUDIO_SERVER,
                      ASR_SERVER, ASR_IS_REMOTE, IMAGE_API_SERVER, IMAGE_VIA_API,
                      INLINE_IMAGES, INLINE_IMAGE_MAX, TRANSPORT, HTTP_HOST, HTTP_PORT, HTTP_PATH)
 
@@ -750,7 +750,7 @@ async def continuity_status() -> Annotated[CallToolResult, results.StatusResult]
              f"资产目录: {STATE_DIR}",
              f"  角色 {len(actors)} 个, 定妆 {len(subjects)} 个",
              f"抠图默认档: {DEFAULT_CUTOUT_QUALITY}",
-             f"空闲卸载: {'关闭 (模型常驻)' if AUDIO_IDLE_UNLOAD_S <= 0 else f'{AUDIO_IDLE_UNLOAD_S:.0f}s 后释放显存'}"]
+             "空闲卸载: 由引擎负责 (audio_server.json 的 idle_unload_ms)"]
     setup_needed = not ok and not engines.setup_was_run()
     if setup_needed:
         lines.append("")
@@ -764,7 +764,7 @@ async def continuity_status() -> Annotated[CallToolResult, results.StatusResult]
                 audio=results.EngineInfo(url=AUDIO_SERVER, enabled=ENABLE_AUDIO,
                                          reachable="audiocpp_server" not in down),
                 state_dir=str(STATE_DIR), actors=len(actors), subjects=len(subjects),
-                cutout_quality=DEFAULT_CUTOUT_QUALITY, idle_unload_s=AUDIO_IDLE_UNLOAD_S,
+                cutout_quality=DEFAULT_CUTOUT_QUALITY,
                 setup_needed=setup_needed)
 
 
@@ -820,7 +820,6 @@ def main(argv=None):
     args = _parse_args(argv)
     for d in (STATE_DIR, ACTORS_DIR, SUBJECTS_DIR, GENERATED_DIR):
         d.mkdir(parents=True, exist_ok=True)
-    engines.start_idle_watch()
     atexit.register(engines.shutdown)      # 关掉 agent 也要还回显存
     # SIGTERM 默认直接终止, atexit 不跑; 而 dsh 关掉 stdin 之后 2 秒就发 SIGTERM。
     # 处理器里不能只 sys.exit —— SystemExit 会被 asyncio 事件循环吞掉, 进程反而挂住,

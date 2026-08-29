@@ -145,11 +145,12 @@ DEFAULT_SAMPLE_TEXT = _env(
     "DEFAULT_SAMPLE_TEXT",
     "江湖路远，人心难测。今日一别，山高水长，来日方长，后会有期。")
 
-# 空闲这么久之后把音频模型全卸掉, 让整张卡回到零常驻。
-# 不"用完立刻卸"是因为重载要 4.3 s —— 连着配十句台词的人不该每句都付这个钱;
-# 也不能不卸, 否则这张卡在用户不用我们的时候仍被占着 2 GB, 打不了游戏。
-# 0 = 关闭空闲卸载 (始终常驻)。
-AUDIO_IDLE_UNLOAD_S = float(_env("AUDIO_IDLE_UNLOAD_S", "120"))
+# 空闲卸载不再由本进程做, 改由引擎的 idle_unload_ms 负责 (deploy/audio_server.json.tmpl,
+# 默认 120000 ms)。原因不是省一个线程: 本进程的计时器按自己的 last_use 判, 所以任何
+# 不经过它的加载 —— 另一个客户端直连引擎、上一代被 SIGKILL 后留下的常驻模型 ——
+# 它永远不会去卸。实测过: 直连引擎加载一个模型, continuity 在跑、等满 120s,
+# 显存纹丝不动。引擎的计时器按 session 是否真在判, 不在乎是谁加载的。
+# 需要模型常驻就把 idle_unload_ms 设成 0。
 
 # 生成产物保留天数; 0 表示不清理。actors/ 和 subjects/ 永不清理。
 RETENTION_DAYS = float(_env("RETENTION_DAYS", "30"))

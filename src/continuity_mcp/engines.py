@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
-                     AUDIO_IDLE_UNLOAD_S, SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
+                     SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
                      STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER,
                      ASR_SERVER, ASR_API_KEY,
                      IMAGE_API_SERVER, IMAGE_API_KEY, IMAGE_API_MODEL, IMAGE_API_SIZES,
@@ -291,16 +291,10 @@ def draw(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b64=None)
 # ---- 音频显存生命周期 ----
 _audio_state = {"last_use": 0.0, "loaded": False}
 _busy = threading.Event()
-_idle_thread = None
 
 
 def mark_busy():
-    """任务开始 —— 空闲卸载绝不能打断正在跑的任务。
-
-    顺手保证空闲看守已经起来: 早先它只在 server.main() 里启动, 于是任何不走 main()
-    的入口 (测试、把本模块当库用) 都会永远不卸载, 而那种"忘了启动"从外部看
-    与"卸载失效"完全一样。"""
-    start_idle_watch()
+    """任务开始 —— 互斥卸载绝不能打断正在跑的任务。"""
     _busy.set()
 
 
@@ -347,45 +341,6 @@ def unload_all_audio(reason="explicit", timeout=15):
     return release_all_but(None, reason, timeout=timeout)
 
 
-def _idle_loop():
-    """空闲够久就把显存还给用户 —— 他要拿这张卡打游戏。
-
-    和 shutdown() 一样, 不看 _audio_state["loaded"]: 那是本进程的记账, 而显存是
-    引擎持有的。上一代进程被 SIGKILL 或超时后, 模型还在引擎里占着, 新一代记账为空,
-    于是"120s 后自动释放"这句话对重连之后的所有进程都是空头支票 —— 而
-    continuity_status 还在照常打印它。改成: 起来先卸一次 (幂等), 之后按空闲时间卸。
-    卸载失败只 warn, 不影响任何任务。
-
-    每个空闲段只卸一次 (unloaded_for 记住是为哪一次 last_use 卸的)。原先只看
-    "距 last_use 是不是超了 120s" —— 而卸载并不更新 last_use, 所以条件一旦成立就
-    再也不会不成立: 之后每 5 秒往引擎发一次 unload_models, 一天一万七千次。
-    stdio 下看不出来, 进程跟着 dsh 会话一起没了; 而 --http 是常驻的, 它会一直发。
-    """
-    first = True
-    unloaded_for = None                     # 已经为哪一次 last_use 卸过了
-    while True:
-        time.sleep(5 if not first else 1)
-        if AUDIO_IDLE_UNLOAD_S <= 0 or _busy.is_set():
-            continue
-        if first:
-            # 接管上一代可能留下的显存。本进程还没跑过任何任务, 卸掉不会打断谁。
-            first = False
-            release_all_but(None, "接管上一代", timeout=5)
-            unloaded_for = _audio_state["last_use"]
-            continue
-        last_use = _audio_state["last_use"]
-        if last_use != unloaded_for and time.time() - last_use >= AUDIO_IDLE_UNLOAD_S:
-            unload_all_audio(f"空闲 {AUDIO_IDLE_UNLOAD_S:.0f}s")
-            unloaded_for = last_use
-
-
-def start_idle_watch():
-    global _idle_thread
-    if _idle_thread is None and AUDIO_IDLE_UNLOAD_S > 0:
-        _idle_thread = threading.Thread(target=_idle_loop, daemon=True)
-        _idle_thread.start()
-
-
 def shutdown():
     """MCP server 退出时把显存还回去。
 
@@ -396,10 +351,12 @@ def shutdown():
     # 不看 _audio_state["loaded"]: 那是本进程的记账, 而显存是引擎持有的, 跨进程共享。
     # dsh 断线重连会换一个新进程, 它记账为空 —— 于是"退出时还显存"对重连之后的那一代
     # 永远不会触发, 而引擎那边模型还占着。卸载本身是幂等的, 没有就是个空操作, 直接发。
-    if True:
-        if not unload_all_audio("shutdown", timeout=SHUTDOWN_UNLOAD_TIMEOUT_S):
-            log.warning("退出时没来得及卸载显存 —— 引擎仍占着音频模型, "
-                        "它会在 %.0fs 空闲后自己卸掉", AUDIO_IDLE_UNLOAD_S)
+    #
+    # 这一步在引擎有 idle_unload_ms 之后仍然要留: 它买的是"立刻", 而计时器买的是
+    # "最终"。关掉 agent 去打游戏的人不该再等两分钟。失败也只是退化成等计时器。
+    if not unload_all_audio("shutdown", timeout=SHUTDOWN_UNLOAD_TIMEOUT_S):
+        log.warning("退出时没来得及卸载显存 —— 引擎仍占着音频模型, "
+                    "等它自己的 idle_unload_ms 到点再卸")
 
 
 # ---- 语音 ----

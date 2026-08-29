@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-continuity",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Local image / voice / music / SFX generation for DeepSeek Harness with pinned identity: the same character stays the same character across calls, degenerate output is refused rather than returned, and the GPU is untouched when idle. Hand the image half to any OpenAI-shaped API instead and its engine and 10.1 GiB of weights are never installed.",
   "type": "module",
   "files": [

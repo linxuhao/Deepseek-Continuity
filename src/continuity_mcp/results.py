@@ -204,5 +204,8 @@ class StatusResult(Result):
     actors: int = 0
     subjects: int = 0
     cutout_quality: str | None = None
-    idle_unload_s: float | None = None    # <=0 表示模型常驻
+    # 空闲卸载已交给引擎 (audio_server.json 的 idle_unload_ms), 本进程不再知道
+    # 它被设成了多少, 所以这个字段不再填。留着字段本身是因为它在工具的
+    # outputSchema 里, 而那是调用方的契约 —— 删字段要走一次破坏性发版。
+    idle_unload_s: float | None = None
     setup_needed: bool = False            # 引擎连不上且看起来没跑过 continuity-setup
