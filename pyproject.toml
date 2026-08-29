@@ -1,6 +1,6 @@
 [project]
 name = "dsh-continuity"
-version = "0.5.3"
+version = "0.5.4"
 description = "Asset consistency and output verification for agent-generated game media: image, voice, music and SFX from local Vulkan backends with zero VRAM when idle, or from any OpenAI-shaped image/ASR API instead."
 readme = "README.md"
 requires-python = ">=3.11"
