@@ -33,7 +33,7 @@ import uuid
 from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGINE_WAIT_S,
                      SPEECH_TOKENS_PER_CHAR, SPEECH_MAX_TOKENS,
                      STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER,
-                     ASR_SERVER, ASR_API_KEY,
+                     AUDIO_API_KEY, ASR_SERVER, ASR_API_KEY,
                      IMAGE_API_SERVER, IMAGE_API_KEY, IMAGE_API_MODEL, IMAGE_API_SIZES,
                      IMAGE_VIA_API)
 
@@ -170,8 +170,9 @@ def post_multipart(url, fields, file_part, tag, timeout=None, retry_s=None,
                  retry_timeouts=retry_timeouts)
 
 
-def get(url, timeout=30, tag="engine", retry_s=0.0):
-    return _http(urllib.request.Request(url), timeout, tag, retry_s=retry_s)
+def get(url, timeout=30, tag="engine", retry_s=0.0, api_key=None):
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return _http(urllib.request.Request(url, headers=headers), timeout, tag, retry_s=retry_s)
 
 
 # ---- 生图 ----
@@ -325,7 +326,7 @@ def release_all_but(keep=None, reason="", timeout=120):
         # retry_s=0: 这是 best-effort 的清理, 失败只是少省一点显存。早先它跟着默认值
         # 重试 180s, 于是引擎不在时, 每个任务在真正开始之前先白等三分钟。
         post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others},
-             "audiocpp_server", timeout=timeout, retry_s=0)
+             "audiocpp_server", timeout=timeout, retry_s=0, api_key=AUDIO_API_KEY or None)
         if keep is None:
             _audio_state["loaded"] = False
             log.info("音频模型已全部卸载%s, 显卡回到零常驻", f" ({reason})" if reason else "")
@@ -390,7 +391,7 @@ def tts(model_id, text, voice_ref_b64=None, reference_text=None, instructions=No
         body["seed"] = seed
     if speaking_rate:
         body["options"] = {"speaking_rate": speaking_rate}
-    res = post(f"{AUDIO_SERVER}/v1/audio/speech", body, tag)
+    res = post(f"{AUDIO_SERVER}/v1/audio/speech", body, tag, api_key=AUDIO_API_KEY or None)
     b64 = res.get("audio")
     if not b64:
         raise RuntimeError(f"{model_id} returned no audio: {str(res)[:300]}")
@@ -438,7 +439,8 @@ def transcribe(model_id, audio_bytes, filename="audio.wav", language=None,
     if language:
         fields["language"] = language
     res = post_multipart(f"{AUDIO_SERVER}/v1/audio/transcriptions", fields,
-                         ("file", filename, audio_bytes, "audio/wav"), tag)
+                         ("file", filename, audio_bytes, "audio/wav"), tag,
+                         api_key=AUDIO_API_KEY or None)
     return _text_of(res, model_id)
 
 
@@ -491,14 +493,14 @@ def health():
             down.append("image_api")
     elif not _ok(f"{SD_SERVER}/sdcpp/v1/capabilities", "sd_server"):
         down.append("sd_server")
-    if not _ok(f"{AUDIO_SERVER}/health", "audiocpp_server"):
+    if not _ok(f"{AUDIO_SERVER}/health", "audiocpp_server", api_key=AUDIO_API_KEY or None):
         down.append("audiocpp_server")
     return (not down), down
 
 
-def _ok(url, tag):
+def _ok(url, tag, api_key=None):
     try:
-        get(url, timeout=5, tag=tag)
+        get(url, timeout=5, tag=tag, api_key=api_key)
         return True
     except Exception:
         return False

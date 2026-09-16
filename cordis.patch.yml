@@ -46,6 +46,8 @@
           # 这几个必须逐个列在这里。env 是一份显式字典, 没列的键在 MCP server 那边
           # 根本不存在 —— 于是"我明明设了 CONTINUITY_ASR_SERVER"会静默无效。
           #
+          # 音频后端 (AUDIO_SERVER) 前面隔着要 token 的网关时填。空 = 不发 Authorization 头。
+          AUDIO_API_KEY: !!js process.env.CONTINUITY_AUDIO_API_KEY ?? ''
           # 听写: 任何 OpenAI 形状的 /v1/audio/transcriptions。空 = 跟着 AUDIO_SERVER。
           # 给根地址, 不带 /v1。
           ASR_SERVER: !!js process.env.CONTINUITY_ASR_SERVER ?? ''

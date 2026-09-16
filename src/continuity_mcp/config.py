@@ -39,6 +39,13 @@ DEFAULT_SD_SERVER = "http://127.0.0.1:9020"
 DEFAULT_AUDIO_SERVER = "http://127.0.0.1:9021"
 SD_SERVER = _env("SD_SERVER", DEFAULT_SD_SERVER)
 AUDIO_SERVER = _env("AUDIO_SERVER", DEFAULT_AUDIO_SERVER)
+# 音频后端要鉴权时的 key (Authorization: Bearer)。空 = 不发这个头, 请求和以前逐字节一样。
+#
+# 为什么需要它: "另一台 audiocpp_server" 是 AUDIO_SERVER 唯一能指向的东西, 而一旦它
+# 真的在另一台机器上, 中间几乎总隔着一层要 token 的网关 —— 没有这个变量, BYO 音频
+# 只在"对方完全不设防"时才成立。它覆盖打给 AUDIO_SERVER 的每一个请求 (配音、音乐、
+# 本机听写、卸载、探活); ASR_SERVER 指到别处时那边用自己的 ASR_API_KEY, 不借这个。
+AUDIO_API_KEY = _env("AUDIO_API_KEY", "")
 
 # 听写单独一个后端地址, 默认跟着 AUDIO_SERVER 走 —— 不设它, 一切和以前一样。
 #

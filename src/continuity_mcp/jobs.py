@@ -186,7 +186,8 @@ def generate_music(prompt, seed=None, duration=30.0, num_inference_steps=None):
     def work():
         t = time.time()
         res = engines.post(f"{engines.AUDIO_SERVER}/v1/tasks/run",
-                           {"model": MUSIC_MODEL_ID, "request": req}, "audiocpp_server")
+                           {"model": MUSIC_MODEL_ID, "request": req}, "audiocpp_server",
+                           api_key=engines.AUDIO_API_KEY or None)
         b64 = res.get("audio")
         if not b64:
             raise RuntimeError(f"audiocpp_server returned no audio: {str(res)[:300]}")

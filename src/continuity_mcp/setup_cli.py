@@ -141,6 +141,7 @@ def write_config(state_dir, models_dir, report, args, byo=None):
         # MCP server 要连的地址: BYO 那半是用户给的, 其余是本机起的
         "SD_SERVER": byo.get("image") or f"http://127.0.0.1:{args.sd_port}",
         "AUDIO_SERVER": byo.get("audio") or f"http://127.0.0.1:{args.audio_port}",
+        "AUDIO_API_KEY": args.audio_api_key or "",
         # 空字符串 = 跟着 AUDIO_SERVER 走 (config.py 里那个 or)
         "ASR_SERVER": byo.get("asr") or "",
         "ASR_API_KEY": args.asr_api_key or "",
@@ -177,6 +178,7 @@ def wait_healthy(env, profiles, timeout=300):
     from . import engines
     engines.SD_SERVER = env["SD_SERVER"]
     engines.AUDIO_SERVER = env["AUDIO_SERVER"]
+    engines.AUDIO_API_KEY = env.get("AUDIO_API_KEY", "")
     deadline = time.time() + timeout
     while time.time() < deadline:
         ok, down = engines.health()
@@ -418,6 +420,8 @@ def main():
                     help="生图后端你自己提供 —— 本机不装这一半 (权重不下, 引擎不起), 工具照常可用")
     ap.add_argument("--audio-server", metavar="URL",
                     help="音频后端你自己提供 —— 本机不装这一半, 工具照常可用")
+    ap.add_argument("--audio-api-key", metavar="KEY",
+                    help="音频后端要鉴权时用 (Authorization: Bearer)")
     ap.add_argument("--image-api-server", metavar="URL",
                     help="生图接别人家的标准 API (OpenAI 形状的 /v1/images/generations; "
                          "给根地址, 不带 /v1)。本机不装生图那半 —— 10.1 GiB 权重不下, "
