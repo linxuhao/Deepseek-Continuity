@@ -604,7 +604,7 @@ other local**:
 | | env var | what it must be |
 |---|---|---|
 | image | `SD_SERVER` | a **stable-diffusion.cpp `sd-server`** (`/sdcpp/v1/img_gen` + poll, accepts `ref_images`) |
-| audio | `AUDIO_SERVER` | an **audio.cpp `audiocpp_server`** (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/tasks/run`, `/v1/tasks/unload_models`) serving `qwen3-tts` / `qwen3-tts-base` / `stable-audio` / `qwen3-asr` |
+| audio | `AUDIO_SERVER` (+ optional `AUDIO_API_KEY`) | an **audio.cpp `audiocpp_server`** (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/tasks/run`, `/v1/tasks/unload_models`) serving `qwen3-tts` / `qwen3-tts-base` / `stable-audio` / `qwen3-asr` |
 | asr | `ASR_SERVER` + `ASR_API_KEY` | **anything OpenAI-shaped**: multipart `file` + `model` on `/v1/audio/transcriptions`, returning `{"text": ...}`. Defaults to `AUDIO_SERVER`. Give the **root** URL, no `/v1` — the path is appended. |
 | image via API | `IMAGE_API_SERVER` + `IMAGE_API_KEY` | **anything OpenAI-shaped**: `/v1/images/generations`, plus `/v1/images/edits` when a reference image is involved; either `b64_json` or `url` in the response is accepted. Setting it wins over `SD_SERVER` — unlike the ASR knob it *selects a protocol*, not just an address, because our own engine speaks sd.cpp's `/sdcpp/v1/img_gen` and nothing else does. |
 
@@ -633,6 +633,13 @@ point at — vLLM, a hosted API, another box. Speech and music have no such opti
 `voice_ref` as inline base64 with a `reference_text` alongside it, and music goes through
 `/v1/tasks/run` — both are audio.cpp's own shapes, which no third party speaks. Their "BYO" can
 only ever mean *another `audiocpp_server`*, and that is what `AUDIO_SERVER` already is.
+
+Another `audiocpp_server` on another machine is almost always behind a gateway that wants a
+token, so `AUDIO_API_KEY` sends `Authorization: Bearer <key>` on **every** request to
+`AUDIO_SERVER` — speech, music, local transcription, unloading and the health probe alike.
+Unset, no header is sent and the requests are exactly what they were. It does not follow
+transcription elsewhere: when `ASR_SERVER` points at a different backend, that backend's key
+is `ASR_API_KEY`.
 
 **The two paths do not share assumptions, and the code keeps them apart.** For our own engine we
 picked the model, so we know it runs at 16 kHz and we downsample to it — nothing is lost, the
