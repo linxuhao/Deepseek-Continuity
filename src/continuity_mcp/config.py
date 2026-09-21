@@ -109,6 +109,12 @@ AUDIO_MODELS = ({MUSIC_MODEL_ID, DESIGN_MODEL_ID, CLONE_MODEL_ID}
                 | (set() if ASR_IS_REMOTE else {ASR_MODEL_ID}))
 
 MAX_IMAGE_SIZE = int(_env("MAX_IMAGE_SIZE", "1024"))
+# 采样参数跟着模型走, 所以是配置不是常量。FLUX.2 Klein 是蒸馏过的: 4 步、cfg 1.0,
+# 真 CFG 对它没有意义, 只会白付一倍算力。Qwen-Image-2.1 不是蒸馏的, 官方是 20 步 +
+# cfg 6.0 —— 拿 Klein 那套参数喂它出来的是半成品, 而这条路上没有任何一层会说参数
+# 不对: sd-server 的命令行默认值会被每个请求里的 steps/cfg_scale 覆盖掉。
+SD_STEPS = int(_env("SD_STEPS", "4"))
+SD_CFG_SCALE = float(_env("SD_CFG_SCALE", "1.0"))
 # 引擎自己在 120s 硬截断: 请求 180/240/300/480 都返回 120001 ms 且不报错。
 # 保留这个上限不是防炸 (显存/耗时都与时长无关), 而是把引擎的"静默截断"变成响应里
 # 显式的 clamped 字段, 让调用方知道自己被截了。

@@ -110,7 +110,7 @@ def _run(fn, *a, needs=None, **kw):
 # ---- 图像 ----
 
 def generate_image(prompt, width=1024, height=1024, seed=None, ref_b64=None,
-                   steps=None, cfg_scale=1.0):
+                   steps=None, cfg_scale=None):
     want_w, want_h, w, h = _clamp_size(width, height)
     def work():
         data, ext, notes = engines.draw(prompt, w, h, steps, cfg_scale, seed, ref_b64)

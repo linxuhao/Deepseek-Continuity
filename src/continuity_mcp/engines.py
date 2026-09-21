@@ -35,7 +35,7 @@ from .config import (SD_SERVER, AUDIO_SERVER, AUDIO_MODELS, JOB_TIMEOUT_S, ENGIN
                      STATE_DIR, DEFAULT_SD_SERVER, DEFAULT_AUDIO_SERVER,
                      AUDIO_API_KEY, ASR_SERVER, ASR_API_KEY,
                      IMAGE_API_SERVER, IMAGE_API_KEY, IMAGE_API_MODEL, IMAGE_API_SIZES,
-                     IMAGE_VIA_API)
+                     IMAGE_VIA_API, SD_STEPS, SD_CFG_SCALE)
 
 log = logging.getLogger("continuity")
 
@@ -177,10 +177,10 @@ def get(url, timeout=30, tag="engine", retry_s=0.0, api_key=None):
 
 # ---- 生图 ----
 
-def sd_generate(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b64=None):
+def sd_generate(prompt, width, height, steps=None, cfg_scale=None, seed=None, ref_b64=None):
     """向 sd-server 提交一张图并等它出来, 返回 (图片字节, 后缀)。"""
     payload = {"prompt": prompt, "width": width, "height": height,
-               "steps": steps or 4, "cfg_scale": cfg_scale or 1.0}
+               "steps": steps or SD_STEPS, "cfg_scale": cfg_scale or SD_CFG_SCALE}
     if seed is not None:
         payload["seed"] = seed
     if ref_b64:
@@ -278,7 +278,7 @@ def image_api(prompt, width, height, seed=None, ref_b64=None):
     return data, ext, notes
 
 
-def draw(prompt, width, height, steps=4, cfg_scale=1.0, seed=None, ref_b64=None):
+def draw(prompt, width, height, steps=None, cfg_scale=None, seed=None, ref_b64=None):
     """出一张图 —— 自己的引擎还是别人家的 API, 由 IMAGE_API_SERVER 决定。
 
     返回 (bytes, ext, notes)。notes 只有 API 那条路才会非空。
